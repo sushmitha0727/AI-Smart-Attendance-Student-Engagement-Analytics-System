@@ -1,0 +1,6 @@
+{
+  "name": "Smart Attendance & Engagement Analytics",
+  "description": "Multi-role academic platform with dynamic rotating QR attendance, face verification challenge, attendance recovery planner, and transparent 5-mark participation scoring.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
