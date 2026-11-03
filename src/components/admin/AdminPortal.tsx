@@ -186,20 +186,6 @@ export const AdminPortal: React.FC = () => {
               );
             })}
           </nav>
-
-          {/* Institutional Stats Summary in Side Panel */}
-          <div className="mt-4 pt-3 border-t border-slate-100 p-2 text-xs">
-            <div className="flex items-center justify-between text-slate-500 text-[11px] mb-1">
-              <span>Institution Attendance:</span>
-              <span className="font-mono font-bold text-purple-700">{overallStats.percentage}%</span>
-            </div>
-            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-purple-700 rounded-full"
-                style={{ width: `${Math.min(100, overallStats.percentage)}%` }}
-              />
-            </div>
-          </div>
         </aside>
 
         {/* Right Main Content */}
@@ -213,9 +199,6 @@ export const AdminPortal: React.FC = () => {
                   Dean & Controller Mode
                 </span>
               </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Institution Hierarchy: Academic Year &rarr; Program &rarr; Semester &rarr; Section &rarr; Students &rarr; Subjects &rarr; Faculty Assignments
-              </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">

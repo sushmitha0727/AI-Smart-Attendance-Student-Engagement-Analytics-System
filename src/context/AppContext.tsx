@@ -81,7 +81,8 @@ interface AppContextType {
   setCurrentUser: (user: User) => void;
   availableUsers: User[];
   isAuthenticated: boolean;
-  login: (identifier: string, password: string, rememberMe?: boolean) => { success: boolean; message?: string };
+  setIsAuthenticated: (val: boolean) => void;
+  login: (identifier: string, password: string, rememberMe?: boolean, requiredRole?: Role) => { success: boolean; message?: string };
   logout: () => void;
   
   // Firebase Status
@@ -1160,7 +1161,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const login = (identifier: string, password: string, rememberMe: boolean = true): { success: boolean; message?: string } => {
+  const login = (identifier: string, password: string, rememberMe: boolean = true, requiredRole?: Role): { success: boolean; message?: string } => {
     const cleanId = identifier.trim().toLowerCase();
     if (!cleanId) {
       return { success: false, message: 'Please enter your User ID, Roll Number, or Email.' };
@@ -1183,6 +1184,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         success: false,
         message: 'No registered user found with that ID or email. Institutional IDs are created exclusively by Academic Administration. If you are a new student or faculty, contact your administrator.'
+      };
+    }
+
+    if (requiredRole && matchedUser.role !== requiredRole) {
+      return {
+        success: false,
+        message: `This account is not a${requiredRole === 'admin' ? 'n Admin' : requiredRole === 'faculty' ? ' Faculty' : ' Student'} account.`
       };
     }
 
@@ -1226,6 +1234,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCurrentUser,
         availableUsers: users,
         isAuthenticated,
+        setIsAuthenticated,
         login,
         logout,
         firebaseConnected,

@@ -34,9 +34,6 @@ service cloud.firestore {
     }
 
     // Public / general read & write for portal functionality
-    // Admin can manage all records
-    // Faculty can view and edit assigned sections, attendance, assignments, quizzes, tests, notices
-    // Students can view records and cannot modify attendance or marks
     match /admins/{adminId} {
       allow read, write: if true;
     }
@@ -66,7 +63,6 @@ service cloud.firestore {
     }
 
     match /attendanceRecords/{recordId} {
-      // Students can view records; faculty and admin can write; students cannot modify attendance
       allow read: if true;
       allow write: if !isStudent();
     }
@@ -105,7 +101,6 @@ service cloud.firestore {
     }
 
     match /participationMarks/{markId} {
-      // Students cannot modify approved participation marks
       allow read: if true;
       allow write: if !isStudent();
     }
@@ -123,6 +118,14 @@ service cloud.firestore {
     }
 
     match /groupProjects/{projectId} {
+      allow read, write: if true;
+    }
+
+    match /photoChangeRequests/{requestId} {
+      allow read, write: if true;
+    }
+
+    match /attendanceReviewRequests/{requestId} {
       allow read, write: if true;
     }
 
