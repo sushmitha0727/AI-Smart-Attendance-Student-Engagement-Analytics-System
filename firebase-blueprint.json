@@ -1,0 +1,219 @@
+{
+  "entities": {
+    "Student": {
+      "title": "Student",
+      "description": "Enrolled student academic identity and profile record",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "description": "Unique institutional student roll or registration number" },
+        "name": { "type": "string", "description": "Full student name" },
+        "email": { "type": "string", "format": "email", "description": "Official university email address" },
+        "program": { "type": "string", "description": "Program of study name or degree" },
+        "programId": { "type": "string", "description": "Internal program identifier" },
+        "academicYear": { "type": "string", "description": "Enrolled academic session year" },
+        "semester": { "type": "string", "description": "Enrolled semester" },
+        "semesterId": { "type": "string", "description": "Internal semester identifier" },
+        "section": { "type": "string", "description": "Enrolled class or section name" },
+        "sectionId": { "type": "string", "description": "Internal section identifier" },
+        "yearOfStudy": { "type": "number", "description": "Academic study year (1 to 5)" },
+        "faceConsentGiven": { "type": "boolean", "description": "Biometric face verification consent" },
+        "registeredFacePhotoUrl": { "type": "string", "description": "Firebase Storage URL for profile/face photo" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of enrollment" }
+      },
+      "required": ["studentId", "name", "email"]
+    },
+    "Faculty": {
+      "title": "Faculty",
+      "description": "Appointed faculty teacher record and department assignment",
+      "type": "object",
+      "properties": {
+        "facultyId": { "type": "string", "description": "Unique faculty employee ID" },
+        "name": { "type": "string", "description": "Full faculty name" },
+        "email": { "type": "string", "format": "email", "description": "Official institutional email address" },
+        "department": { "type": "string", "description": "Academic department or division" },
+        "designation": { "type": "string", "description": "Faculty title or rank" },
+        "assignedSubjectIds": { "type": "array", "description": "IDs of subjects assigned to teach" },
+        "assignedSectionIds": { "type": "array", "description": "IDs of class sections assigned to handle" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of appointment" }
+      },
+      "required": ["facultyId", "name", "email", "department"]
+    },
+    "Subject": {
+      "title": "Subject",
+      "description": "Course or subject catalog entry",
+      "type": "object",
+      "properties": {
+        "subjectId": { "type": "string", "description": "Course code or subject ID" },
+        "subjectName": { "type": "string", "description": "Official course title" },
+        "semester": { "type": "string", "description": "Applicable semester" },
+        "academicYear": { "type": "string", "description": "Academic year session" },
+        "section": { "type": "string", "description": "Applicable class section" },
+        "facultyId": { "type": "string", "description": "Assigned faculty employee ID" },
+        "credits": { "type": "number", "description": "Credit hours" },
+        "type": { "type": "string", "description": "Theory, Practical/Lab, Theory+Lab" }
+      },
+      "required": ["subjectId", "subjectName"]
+    },
+    "Section": {
+      "title": "Section",
+      "description": "Academic cohort class section",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Section or class name" },
+        "programId": { "type": "string", "description": "Associated program ID" },
+        "semesterId": { "type": "string", "description": "Associated semester ID" },
+        "academicYearId": { "type": "string", "description": "Associated academic year ID" },
+        "studentCount": { "type": "number", "description": "Total enrolled students count" }
+      },
+      "required": ["name"]
+    },
+    "TimetableSlot": {
+      "title": "TimetableSlot",
+      "description": "Scheduled lecture or lab period in timetable",
+      "type": "object",
+      "properties": {
+        "subjectId": { "type": "string", "description": "Course code or subject ID" },
+        "facultyId": { "type": "string", "description": "Assigned faculty employee ID" },
+        "academicYear": { "type": "string", "description": "Academic year" },
+        "section": { "type": "string", "description": "Target class section" },
+        "day": { "type": "string", "description": "Day of the week" },
+        "startTime": { "type": "string", "description": "Start time (HH:MM)" },
+        "endTime": { "type": "string", "description": "End time (HH:MM)" },
+        "room": { "type": "string", "description": "Classroom or lab venue" },
+        "periodNumber": { "type": "number", "description": "Timetable period number" }
+      },
+      "required": ["subjectId", "facultyId", "section", "day", "startTime", "endTime"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Immutable attendance record for student lecture session",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "description": "Attendance session ID" },
+        "studentId": { "type": "string", "description": "Enrolled student ID / roll number" },
+        "subjectId": { "type": "string", "description": "Subject / course ID" },
+        "sectionId": { "type": "string", "description": "Section ID" },
+        "date": { "type": "string", "description": "Session date (YYYY-MM-DD)" },
+        "status": { "type": "string", "enum": ["present", "absent", "late", "excused"] },
+        "timestamp": { "type": "string", "description": "Verification ISO timestamp" },
+        "verificationMethod": { "type": "string", "description": "Dynamic QR, Biometric 1:1 Face, or Faculty manual" }
+      },
+      "required": ["sessionId", "studentId", "subjectId", "date", "status"]
+    },
+    "Assignment": {
+      "title": "Assignment",
+      "description": "Course assignment or project task",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Assignment title" },
+        "subjectId": { "type": "string", "description": "Subject ID" },
+        "sectionId": { "type": "string", "description": "Section ID" },
+        "facultyId": { "type": "string", "description": "Faculty ID" },
+        "dueDate": { "type": "string", "description": "Due date" },
+        "maxMarks": { "type": "number", "description": "Maximum marks" }
+      },
+      "required": ["title", "subjectId", "facultyId"]
+    },
+    "QuizAttempt": {
+      "title": "QuizAttempt",
+      "description": "Student submission for live quiz or poll",
+      "type": "object",
+      "properties": {
+        "quizId": { "type": "string", "description": "Quiz ID" },
+        "studentId": { "type": "string", "description": "Student ID" },
+        "score": { "type": "number", "description": "Obtained score" },
+        "maxScore": { "type": "number", "description": "Total possible score" },
+        "attemptedAt": { "type": "string", "description": "Attempt timestamp" }
+      },
+      "required": ["quizId", "studentId", "score"]
+    },
+    "CodingSubmission": {
+      "title": "CodingSubmission",
+      "description": "Student coding laboratory submission",
+      "type": "object",
+      "properties": {
+        "testId": { "type": "string", "description": "Coding test ID" },
+        "studentId": { "type": "string", "description": "Student ID" },
+        "code": { "type": "string", "description": "Submitted source code" },
+        "status": { "type": "string", "description": "Accepted, Passed, or Failed" },
+        "marks": { "type": "number", "description": "Awarded marks" },
+        "submittedAt": { "type": "string", "description": "Submission timestamp" }
+      },
+      "required": ["testId", "studentId", "code"]
+    },
+    "ParticipationMark": {
+      "title": "ParticipationMark",
+      "description": "Provisional participation mark out of 5",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "description": "Student ID" },
+        "subjectId": { "type": "string", "description": "Subject ID" },
+        "provisionalScore": { "type": "number", "description": "Calculated participation score out of 5" },
+        "approvedScore": { "type": "number", "description": "Teacher-approved score" },
+        "status": { "type": "string", "enum": ["provisional", "approved"] },
+        "approvedBy": { "type": "string", "description": "Faculty ID" }
+      },
+      "required": ["studentId", "subjectId", "provisionalScore"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Class announcement or system alert notice",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Notice title" },
+        "content": { "type": "string", "description": "Notice message content" },
+        "targetSubjectId": { "type": "string", "description": "Target course ID" },
+        "targetSectionId": { "type": "string", "description": "Target section ID" },
+        "authorId": { "type": "string", "description": "Author UID" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["title", "content"]
+    }
+  },
+  "firestore": {
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Permanent store for enrolled students"
+    },
+    "/faculty/{facultyId}": {
+      "schema": "Faculty",
+      "description": "Permanent store for appointed faculty and teachers"
+    },
+    "/subjects/{subjectId}": {
+      "schema": "Subject",
+      "description": "Course catalog and faculty assignments"
+    },
+    "/sections/{sectionId}": {
+      "schema": "Section",
+      "description": "Academic cohort class sections"
+    },
+    "/timetable/{slotId}": {
+      "schema": "TimetableSlot",
+      "description": "Weekly timetable lecture and lab schedule"
+    },
+    "/attendanceRecords/{recordId}": {
+      "schema": "AttendanceRecord",
+      "description": "Session attendance entries"
+    },
+    "/assignments/{assignmentId}": {
+      "schema": "Assignment",
+      "description": "Faculty course assignments"
+    },
+    "/quizAttempts/{attemptId}": {
+      "schema": "QuizAttempt",
+      "description": "Student quiz scores"
+    },
+    "/codingSubmissions/{submissionId}": {
+      "schema": "CodingSubmission",
+      "description": "Student coding practical submissions"
+    },
+    "/participationMarks/{markId}": {
+      "schema": "ParticipationMark",
+      "description": "Calculated and approved participation marks"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "Class announcements and academic notices"
+    }
+  }
+}

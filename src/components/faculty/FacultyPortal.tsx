@@ -2262,8 +2262,19 @@ export const FacultyPortal: React.FC = () => {
                                       </span>
                                     )}
                                   </div>
-                                  <div className="text-slate-500 text-[11px] mt-0.5">
-                                    File: {subm.fileName} · Submitted: {subm.submittedAt}
+                                  <div className="text-slate-500 text-[11px] mt-0.5 flex flex-wrap items-center gap-2">
+                                    <span>File: {subm.fileName} · Submitted: {subm.submittedAt}</span>
+                                    {subm.fileUrl && (
+                                      <a
+                                        href={subm.fileUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-semibold underline"
+                                      >
+                                        <Download className="w-3 h-3" />
+                                        <span>Download File</span>
+                                      </a>
+                                    )}
                                   </div>
                                   {subm.feedback && (
                                     <p className="text-slate-600 text-[11px] italic mt-1">"{subm.feedback}"</p>

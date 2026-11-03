@@ -21,9 +21,11 @@ import {
   Search,
   Filter,
   Building2,
+  Database,
 } from 'lucide-react';
 import { calculateAttendanceStats } from '../../utils/academicCalculations';
 import { IdProvisioningManager } from './IdProvisioningManager';
+import { AdminDataManagement } from './AdminDataManagement';
 import {
   generateStudentsCsv,
   generateTeachersCsv,
@@ -32,6 +34,8 @@ import {
 
 export const AdminPortal: React.FC = () => {
   const {
+    firebaseConnected,
+    firebaseLatency,
     academicYears,
     programs,
     semesters,
@@ -65,6 +69,7 @@ export const AdminPortal: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<
     | 'dashboard'
+    | 'data_management'
     | 'id_provisioning'
     | 'hierarchy'
     | 'faculty_assignments'
@@ -144,6 +149,7 @@ export const AdminPortal: React.FC = () => {
           <nav className="flex flex-col gap-1 w-full text-xs">
             {[
               { id: 'dashboard', label: 'Dashboard', icon: Layers },
+              { id: 'data_management', label: 'Data Management & CSV', icon: Database, badge: 'Firestore' },
               { id: 'id_provisioning', label: 'ID & User Provisioning', icon: IdCard, badge: 'Admin Only' },
               { id: 'hierarchy', label: 'Academic Structure', icon: BookOpen },
               { id: 'faculty_assignments', label: 'Faculty Assignments', icon: Users },
@@ -212,13 +218,29 @@ export const AdminPortal: React.FC = () => {
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold ${
+                  firebaseConnected
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : 'bg-rose-50 text-rose-800 border-rose-200'
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${firebaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                <span>{firebaseConnected ? 'Cloud Firestore Active' : 'Offline Mode'}</span>
+                {firebaseConnected && firebaseLatency !== null && (
+                  <span className="font-mono text-[10px] text-slate-500 font-normal">({firebaseLatency}ms)</span>
+                )}
+              </div>
               <div className="px-3.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs">
                 <span className="text-slate-500">Threshold: </span>
                 <span className="font-mono font-bold text-slate-900">{systemSettings.attendanceThresholdPercent}%</span>
               </div>
             </div>
           </div>
+
+      {/* ADMIN DATA MANAGEMENT PAGE (ACTIONS 1-9) */}
+      {activeTab === 'data_management' && <AdminDataManagement />}
 
       {/* ID & USER PROVISIONING (ADMIN EXCLUSIVE) */}
       {activeTab === 'id_provisioning' && <IdProvisioningManager />}

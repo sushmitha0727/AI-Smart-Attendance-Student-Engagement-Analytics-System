@@ -27,7 +27,11 @@ import {
   Calendar,
   AlertCircle,
   Play,
+  UploadCloud,
+  Check,
+  Upload,
 } from 'lucide-react';
+import { uploadAssignmentFile, uploadProfileImage } from '../../services/storageService';
 
 export const StudentPortal: React.FC = () => {
   const {
@@ -52,6 +56,7 @@ export const StudentPortal: React.FC = () => {
     submitQuizAttempt,
     submitCodingSolution,
     submitCorrectionRequest,
+    updateUserProfilePhoto,
   } = useApp();
 
   // Navigation tab state
@@ -87,6 +92,18 @@ export const StudentPortal: React.FC = () => {
   const [activeAssignmentModal, setActiveAssignmentModal] = useState<string | null>(null);
   const [assignmentText, setAssignmentText] = useState('');
   const [assignmentFileName, setAssignmentFileName] = useState('');
+  const [assignmentFile, setAssignmentFile] = useState<File | null>(null);
+  const [assignmentFileUrl, setAssignmentFileUrl] = useState<string | null>(null);
+  const [isUploadingAssignment, setIsUploadingAssignment] = useState(false);
+  const [uploadAssignmentError, setUploadAssignmentError] = useState<string | null>(null);
+
+  // Student Profile Image Modal state
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
+  const [profileFile, setProfileFile] = useState<File | null>(null);
+  const [profilePreview, setProfilePreview] = useState<string | null>(null);
+  const [isUploadingProfile, setIsUploadingProfile] = useState(false);
+  const [profileUploadSuccess, setProfileUploadSuccess] = useState(false);
+  const [profileUploadError, setProfileUploadError] = useState<string | null>(null);
 
   // Quiz modal state
   const [activeQuizModal, setActiveQuizModal] = useState<string | null>(null);
@@ -294,11 +311,27 @@ export const StudentPortal: React.FC = () => {
           {/* Student Welcome Header */}
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
-              <img
-                src={currentUser.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80'}
-                alt={currentUser.name}
-                className="w-14 h-14 rounded-full object-cover ring-2 ring-emerald-500/30"
-              />
+              <div className="relative group">
+                <img
+                  src={currentUser.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80'}
+                  alt={currentUser.name}
+                  className="w-14 h-14 rounded-full object-cover ring-2 ring-emerald-500/30"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileFile(null);
+                    setProfilePreview(null);
+                    setProfileUploadSuccess(false);
+                    setProfileUploadError(null);
+                    setShowPhotoModal(true);
+                  }}
+                  className="absolute inset-0 bg-slate-900/60 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-white text-[10px] font-medium"
+                  title="Update profile face photo"
+                >
+                  <Camera className="w-4 h-4" />
+                </button>
+              </div>
               <div>
                 <div className="flex items-center gap-2">
                   <h1 className="text-xl font-bold text-slate-900">{currentUser.name}</h1>
@@ -306,9 +339,24 @@ export const StudentPortal: React.FC = () => {
                     {currentUser.rollNumber}
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {studentSection?.name || '2nd Year – A'} · B.Tech Computer Science & Engineering · Academic Year 2025–26
-                </p>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <p className="text-xs text-slate-500">
+                    {studentSection?.name || '2nd Year – A'} · B.Tech Computer Science & Engineering · Academic Year 2025–26
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileFile(null);
+                      setProfilePreview(null);
+                      setProfileUploadSuccess(false);
+                      setProfileUploadError(null);
+                      setShowPhotoModal(true);
+                    }}
+                    className="text-[11px] text-indigo-600 hover:text-indigo-800 underline font-medium cursor-pointer"
+                  >
+                    Change Face Photo
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1333,6 +1381,9 @@ export const StudentPortal: React.FC = () => {
                           setActiveAssignmentModal(asg.id);
                           setAssignmentText(submission?.textSolution || '');
                           setAssignmentFileName(submission?.fileName || '');
+                          setAssignmentFile(null);
+                          setAssignmentFileUrl(submission?.fileUrl || null);
+                          setUploadAssignmentError(null);
                         }}
                         className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-medium cursor-pointer"
                       >
@@ -1348,42 +1399,83 @@ export const StudentPortal: React.FC = () => {
           {activeAssignmentModal && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
               <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-lg p-5">
-                <h3 className="font-semibold text-slate-900 text-base mb-1">Submit Assignment</h3>
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="font-semibold text-slate-900 text-base">Submit Assignment</h3>
+                  <span className="text-[10px] uppercase font-bold px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded border border-indigo-200">
+                    Firebase Storage
+                  </span>
+                </div>
                 <p className="text-xs text-slate-500 mb-4">
-                  Enter your solution narrative and attach your completed work.
+                  Enter your solution narrative and upload your assignment file directly to institutional Cloud Storage.
                 </p>
 
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <div>
                     <label className="text-xs font-medium text-slate-700 block mb-1">
                       Solution Notes / Explanation
                     </label>
                     <textarea
-                      rows={4}
+                      rows={3}
                       value={assignmentText}
                       onChange={e => setAssignmentText(e.target.value)}
                       placeholder="Describe your implementation details, algorithmic complexity, and testing results..."
-                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
+                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 outline-hidden"
                     />
                   </div>
 
                   <div>
                     <label className="text-xs font-medium text-slate-700 block mb-1">
-                      Attach File / Archive Name
+                      Upload Solution File (Firebase Storage)
                     </label>
-                    <input
-                      type="text"
-                      value={assignmentFileName}
-                      onChange={e => setAssignmentFileName(e.target.value)}
-                      placeholder="e.g. Solution_AaravSharma_2024CS01.zip"
-                      className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg"
-                    />
+                    <div className="border-2 border-dashed border-slate-300 hover:border-indigo-500 rounded-xl p-4 text-center bg-slate-50/50 transition-colors">
+                      <input
+                        type="file"
+                        id="assignment-file-input"
+                        className="hidden"
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setAssignmentFile(file);
+                            setAssignmentFileName(file.name);
+                            setUploadAssignmentError(null);
+                          }
+                        }}
+                      />
+                      <label htmlFor="assignment-file-input" className="cursor-pointer block">
+                        <UploadCloud className="w-8 h-8 text-indigo-600 mx-auto mb-1.5" />
+                        <span className="text-xs font-semibold text-indigo-700 hover:underline">
+                          {assignmentFile ? 'Change selected file' : 'Click to select assignment file'}
+                        </span>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          PDF, ZIP, DOCX, Java, Python, C++, or text files (Max 50MB)
+                        </p>
+                      </label>
+                      {assignmentFile && (
+                        <div className="mt-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 py-1 px-2.5 rounded-lg inline-flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Selected: <strong>{assignmentFile.name}</strong> ({(assignmentFile.size / 1024).toFixed(1)} KB)</span>
+                        </div>
+                      )}
+                      {!assignmentFile && assignmentFileName && (
+                        <p className="mt-1 text-[11px] text-slate-600">
+                          Previously attached: <span className="font-mono font-medium">{assignmentFileName}</span>
+                        </p>
+                      )}
+                    </div>
                   </div>
+
+                  {uploadAssignmentError && (
+                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{uploadAssignmentError}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-5 flex justify-end gap-2">
                   <button
                     type="button"
+                    disabled={isUploadingAssignment}
                     onClick={() => setActiveAssignmentModal(null)}
                     className="px-4 py-2 text-xs text-slate-700 hover:bg-slate-100 rounded-lg"
                   >
@@ -1391,18 +1483,51 @@ export const StudentPortal: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      submitAssignment({
-                        assignmentId: activeAssignmentModal,
-                        studentId: currentUser.id,
-                        textSolution: assignmentText,
-                        fileName: assignmentFileName || 'Submission_Document.pdf',
-                      });
-                      setActiveAssignmentModal(null);
+                    disabled={isUploadingAssignment}
+                    onClick={async () => {
+                      setIsUploadingAssignment(true);
+                      setUploadAssignmentError(null);
+                      try {
+                        let finalUrl = assignmentFileUrl || '';
+                        let finalFileName = assignmentFileName || 'Submission_Document.pdf';
+
+                        if (assignmentFile && activeAssignmentModal) {
+                          const res = await uploadAssignmentFile(
+                            activeAssignmentModal,
+                            currentUser.id,
+                            assignmentFile
+                          );
+                          finalUrl = res.url;
+                          finalFileName = res.fileName;
+                        }
+
+                        submitAssignment({
+                          assignmentId: activeAssignmentModal!,
+                          studentId: currentUser.id,
+                          textSolution: assignmentText,
+                          fileName: finalFileName,
+                          fileUrl: finalUrl,
+                        });
+                        setIsUploadingAssignment(false);
+                        setActiveAssignmentModal(null);
+                      } catch (err: any) {
+                        setIsUploadingAssignment(false);
+                        setUploadAssignmentError(err.message || 'Failed to upload assignment file.');
+                      }
                     }}
-                    className="px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg"
+                    className="px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 rounded-lg flex items-center gap-1.5"
                   >
-                    Confirm Submission
+                    {isUploadingAssignment ? (
+                      <>
+                        <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Uploading to Storage...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Confirm & Upload Submission</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
@@ -2048,6 +2173,116 @@ export const StudentPortal: React.FC = () => {
       )}
         </div>
       </div>
+
+      {/* Student Profile Face Photo Modal (Firebase Storage) */}
+      {showPhotoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Registered Face Profile Photo</h3>
+                <p className="text-xs text-slate-500">Stored in institutional Firebase Storage</p>
+              </div>
+              <span className="text-[10px] uppercase font-bold px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded border border-indigo-200">
+                Storage
+              </span>
+            </div>
+
+            <div className="flex flex-col items-center justify-center py-2">
+              <div className="relative w-28 h-28 rounded-full overflow-hidden ring-4 ring-slate-100 shadow-inner mb-3">
+                <img
+                  src={profilePreview || currentUser.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80'}
+                  alt="Student Face"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+
+              <input
+                type="file"
+                id="profile-photo-input"
+                accept="image/*"
+                className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    setProfileFile(file);
+                    setProfilePreview(URL.createObjectURL(file));
+                    setProfileUploadSuccess(false);
+                    setProfileUploadError(null);
+                  }
+                }}
+              />
+              <label
+                htmlFor="profile-photo-input"
+                className="cursor-pointer px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5"
+              >
+                <Camera className="w-4 h-4 text-slate-600" />
+                <span>{profileFile ? 'Choose Different Image' : 'Select New Face Image'}</span>
+              </label>
+              <p className="text-[11px] text-slate-400 mt-1.5 text-center">
+                Clear portrait facing front, well-lit, neutral expression
+              </p>
+            </div>
+
+            {profileUploadSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Face profile photo updated and saved permanently to Firebase!</span>
+              </div>
+            )}
+
+            {profileUploadError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{profileUploadError}</span>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowPhotoModal(false)}
+                className="px-4 py-2 text-xs text-slate-700 hover:bg-slate-100 rounded-lg"
+              >
+                Close
+              </button>
+              {profileFile && !profileUploadSuccess && (
+                <button
+                  type="button"
+                  disabled={isUploadingProfile}
+                  onClick={async () => {
+                    if (!profileFile) return;
+                    setIsUploadingProfile(true);
+                    setProfileUploadError(null);
+                    try {
+                      const url = await uploadProfileImage(currentUser.id, profileFile);
+                      await updateUserProfilePhoto(currentUser.id, url);
+                      setIsUploadingProfile(false);
+                      setProfileUploadSuccess(true);
+                    } catch (err: any) {
+                      setIsUploadingProfile(false);
+                      setProfileUploadError(err.message || 'Failed to upload image.');
+                    }
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg flex items-center gap-1.5"
+                >
+                  {isUploadingProfile ? (
+                    <>
+                      <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving to Firebase...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Save to Firebase Storage</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

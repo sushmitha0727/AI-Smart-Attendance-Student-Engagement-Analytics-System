@@ -1152,20 +1152,20 @@ export const IdProvisioningManager: React.FC = () => {
                 onClick={() => {
                   const csvContent =
                     'data:text/csv;charset=utf-8,' +
-                    ['Name,Role,UserID_or_Roll,Email,Password,Status', ...users.map(u => `"${u.name}","${u.role}","${u.rollNumber || u.id}","${u.email}","${u.password || 'password123'}","Active"`)].join('\n');
+                    ['Name,Role,UserID_or_Roll,Email,AuthMethod,Status', ...users.map(u => `"${u.name}","${u.role}","${u.rollNumber || u.id}","${u.email}","Firebase Auth","Active"`)].join('\n');
                   const encodedUri = encodeURI(csvContent);
                   const link = document.createElement('a');
                   link.setAttribute('href', encodedUri);
-                  link.setAttribute('download', `attendly_credentials_roster_${new Date().toISOString().split('T')[0]}.csv`);
+                  link.setAttribute('download', `attendly_roster_accounts_${new Date().toISOString().split('T')[0]}.csv`);
                   document.body.appendChild(link);
                   link.click();
                   document.body.removeChild(link);
                 }}
                 className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
-                title="Export raw authentication credentials log"
+                title="Export user accounts roster"
               >
                 <Download className="w-3.5 h-3.5 text-slate-500" />
-                <span className="hidden sm:inline">Credentials CSV</span>
+                <span className="hidden sm:inline">Roster CSV</span>
               </button>
             </div>
           </div>
@@ -1223,7 +1223,7 @@ export const IdProvisioningManager: React.FC = () => {
                   <th className="py-3 px-3">Role</th>
                   <th className="py-3 px-3">Official User ID / Roll</th>
                   <th className="py-3 px-3">Department / Class</th>
-                  <th className="py-3 px-3">Password</th>
+                  <th className="py-3 px-3">Authentication</th>
                   <th className="py-3 px-3 text-right">Actions</th>
                 </tr>
               </thead>
@@ -1236,8 +1236,6 @@ export const IdProvisioningManager: React.FC = () => {
                   </tr>
                 ) : (
                   filteredUsers.map(user => {
-                    const isVisible = showPasswordMap[user.id];
-                    const pwd = user.password || 'password123';
                     const isCopied = copiedId === user.id;
 
                     return (
@@ -1304,18 +1302,9 @@ export const IdProvisioningManager: React.FC = () => {
                         </td>
 
                         <td className="py-3 px-3">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">
-                              {isVisible ? pwd : '••••••••'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => togglePasswordVisibility(user.id)}
-                              className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
-                              title={isVisible ? 'Hide Password' : 'Show Password'}
-                            >
-                              {isVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                            </button>
+                          <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-amber-50 border border-amber-200/80 rounded-md text-[11px] font-medium text-amber-900">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span>Firebase Auth</span>
                           </div>
                         </td>
 
@@ -1325,7 +1314,7 @@ export const IdProvisioningManager: React.FC = () => {
                               type="button"
                               onClick={() =>
                                 handleCopy(
-                                  `User ID: ${user.rollNumber || user.id}\nPassword: ${pwd}\nEmail: ${user.email}`,
+                                  `Name: ${user.name}\nUser ID: ${user.rollNumber || user.id}\nEmail: ${user.email}\nRole: ${user.role}\nAuthentication: Managed via Firebase Auth`,
                                   user.id
                                 )
                               }

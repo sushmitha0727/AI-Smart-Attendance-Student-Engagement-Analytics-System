@@ -60,6 +60,21 @@ import {
   calculateParticipationScore,
   validateAttendanceScan,
 } from '../utils/academicCalculations';
+import { doc, setDoc, updateDoc } from 'firebase/firestore';
+import { testFirestoreConnection, db } from '../firebase/config';
+import {
+  isFirestoreEmpty,
+  seedFirestoreDatabase,
+  saveStudentToFirestore,
+  saveFacultyToFirestore,
+  saveAttendanceRecordToFirestore,
+  subscribeCollection,
+} from '../services/firestoreService';
+import {
+  loginWithFirebase,
+  logoutFromFirebase,
+  provisionFirebaseAuthAccount,
+} from '../services/authService';
 
 interface AppContextType {
   currentUser: User;
@@ -69,6 +84,14 @@ interface AppContextType {
   login: (identifier: string, password: string, rememberMe?: boolean) => { success: boolean; message?: string };
   logout: () => void;
   
+  // Firebase Status
+  firebaseConnected: boolean;
+  firebaseLatency: number | null;
+  firebaseError: string | null;
+  recheckFirebaseConnection: () => Promise<void>;
+  studentsList: User[];
+  facultyList: User[];
+
   // Academic hierarchy
   academicYears: AcademicYear[];
   programs: Program[];
@@ -180,6 +203,7 @@ interface AppContextType {
   }>) => User[];
   resetUserPassword: (userId: string, newPassword?: string) => string;
   deleteUserAccount: (userId: string) => void;
+  updateUserProfilePhoto: (userId: string, photoUrl: string) => Promise<void>;
 
   resetToDefaults: () => void;
 }
@@ -258,6 +282,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [systemSettings, setSystemSettings] = useState<SystemSettings>(() => getInitialState('systemSettings', DEFAULT_SYSTEM_SETTINGS));
   const [courseMaterials, setCourseMaterials] = useState<CourseMaterial[]>(() => getInitialState('courseMaterials', SEED_COURSE_MATERIALS));
   const [groupProjects, setGroupProjects] = useState<GroupProject[]>(() => getInitialState('groupProjects', SEED_GROUP_PROJECTS));
+
+  // Firebase Real-time Connection State
+  const [firebaseConnected, setFirebaseConnected] = useState<boolean>(true);
+  const [firebaseLatency, setFirebaseLatency] = useState<number | null>(null);
+  const [firebaseError, setFirebaseError] = useState<string | null>(null);
+
+  const recheckFirebaseConnection = async () => {
+    const res = await testFirestoreConnection();
+    setFirebaseConnected(res.connected);
+    setFirebaseLatency(res.latencyMs);
+    setFirebaseError(res.error || null);
+  };
+
+  // On mount: validate Firebase connection & seed demo data if Firestore is empty
+  useEffect(() => {
+    let active = true;
+
+    const bootstrapFirebase = async () => {
+      const res = await testFirestoreConnection();
+      if (!active) return;
+      setFirebaseConnected(res.connected);
+      setFirebaseLatency(res.latencyMs);
+      setFirebaseError(res.error || null);
+
+      if (res.connected) {
+        try {
+          const empty = await isFirestoreEmpty();
+          if (empty && active) {
+            console.log('Firestore is empty. Seeding demo academic dataset...');
+            await seedFirestoreDatabase({
+              users,
+              programs,
+              semesters,
+              sections,
+              subjects,
+              timetable: timetableSlots,
+              facultyAssignments,
+              academicYears,
+              attendanceSessions,
+              attendanceRecords,
+              assignments,
+              assignmentSubmissions,
+              quizzes,
+              quizAttempts,
+              codingTests,
+              codingSubmissions,
+              participationScores,
+              notices,
+              systemSettings,
+            });
+            console.log('Seeded demo academic dataset to Cloud Firestore.');
+          }
+        } catch (seedErr: any) {
+          console.warn('Firestore seeding check notice:', seedErr?.message);
+        }
+
+        // Live real-time subscription for students/faculty/users
+        const unsubUsers = subscribeCollection<User>('users', remoteUsers => {
+          if (remoteUsers && remoteUsers.length > 0) {
+            setUsers(prev => {
+              const map = new Map<string, User>();
+              remoteUsers.forEach(u => map.set(u.id, u));
+              prev.forEach(p => {
+                if (map.has(p.id) && p.password) {
+                  map.get(p.id)!.password = p.password;
+                }
+              });
+              return Array.from(map.values());
+            });
+          }
+        });
+
+        // Live real-time subscription for attendance records
+        const unsubAttendance = subscribeCollection<AttendanceRecord>('attendanceRecords', remoteRecords => {
+          if (remoteRecords && remoteRecords.length > 0) {
+            setAttendanceRecords(remoteRecords);
+          }
+        });
+
+        return () => {
+          unsubUsers();
+          unsubAttendance();
+        };
+      }
+    };
+
+    bootstrapFirebase();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Sync state to local storage
   useEffect(() => {
@@ -410,6 +526,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setAttendanceRecords(prev => [newRecord, ...prev]);
+    saveAttendanceRecordToFirestore(newRecord).catch(e => console.warn('Firestore attendance save notice:', e?.message));
     return { success: true, message: 'Attendance recorded successfully via Face Match + Rotating QR!', record: newRecord };
   };
 
@@ -475,6 +592,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       setAssignmentSubmissions(prev => [newSubm, ...prev]);
     }
+
+    // Persist to Cloud Firestore
+    setDoc(doc(db, 'assignmentSubmissions', newSubm.id), newSubm).catch(e => {
+      console.warn('Firestore assignment submission notice:', e?.message);
+    });
   };
 
   const gradeAssignment = (
@@ -802,6 +924,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     });
 
+    // Save permanently in Cloud Firestore (NO PASSWORDS stored in Firestore)
+    const prog = programs.find(p => p.id === data.programId);
+    const sem = semesters.find(s => s.id === data.semesterId);
+    saveStudentToFirestore({
+      id: newUser.id,
+      studentId: cleanRoll,
+      name: newUser.name,
+      email: newUser.email,
+      program: prog?.name || 'Computer Science',
+      programId: data.programId,
+      academicYear: '2025-2026',
+      semester: sem?.name || 'Semester 1',
+      semesterId: data.semesterId,
+      section: data.sectionName || 'Section A',
+      sectionId: data.sectionId,
+      yearOfStudy: data.yearOfStudy,
+      faceConsentGiven: data.faceConsentGiven,
+      registeredFacePhotoUrl: avatar,
+    }).catch(e => console.warn('Cloud Firestore save notice:', e?.message));
+
+    // Provision Firebase Auth account
+    provisionFirebaseAuthAccount(newUser.email, data.password || 'password123')
+      .catch(e => console.warn('Firebase Auth provisioning notice:', e?.message));
+
     return newUser;
   };
 
@@ -835,6 +981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: data.email.trim(),
       role: 'faculty',
       avatarUrl: avatar,
+      employeeId: empId,
       department: data.department.trim(),
       designation: data.designation.trim(),
       password: data.password?.trim() || 'password123',
@@ -859,6 +1006,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setFacultyAssignments(prev => [...prev, ...newAssignments]);
     }
+
+    // Save permanently in Cloud Firestore (NO PASSWORDS stored in Firestore)
+    saveFacultyToFirestore({
+      id: newUser.id,
+      facultyId: empId,
+      name: newUser.name,
+      email: newUser.email,
+      department: data.department.trim(),
+      designation: data.designation.trim(),
+      assignedSubjectIds: data.subjectIds,
+      assignedSectionIds: data.sectionIds,
+    }).catch(e => console.warn('Cloud Firestore save notice:', e?.message));
+
+    // Provision Firebase Auth account
+    provisionFirebaseAuthAccount(newUser.email, data.password || 'password123')
+      .catch(e => console.warn('Firebase Auth provisioning notice:', e?.message));
 
     return newUser;
   };
@@ -935,6 +1098,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           );
         });
       }
+
+      // Save all batch students permanently to Cloud Firestore
+      createdList.forEach(st => {
+        const prog = programs.find(p => p.id === st.programId);
+        const sem = semesters.find(s => s.id === st.semesterId);
+        saveStudentToFirestore({
+          id: st.id,
+          studentId: st.rollNumber || st.id,
+          name: st.name,
+          email: st.email,
+          program: prog?.name || 'Computer Science',
+          programId: st.programId || 'prog-cse',
+          academicYear: '2025-2026',
+          semester: sem?.name || 'Semester 1',
+          semesterId: st.semesterId || 'sem-1',
+          section: st.sectionId || 'Section A',
+          sectionId: st.sectionId || 'sec-1a',
+          yearOfStudy: st.yearOfStudy,
+          faceConsentGiven: st.faceConsentGiven,
+          registeredFacePhotoUrl: st.avatarUrl,
+        }).catch(e => console.warn('Batch Firestore save notice:', e?.message));
+
+        provisionFirebaseAuthAccount(st.email, st.password || 'password123')
+          .catch(e => console.warn('Batch Firebase Auth notice:', e?.message));
+      });
     }
     return createdList;
   };
@@ -950,6 +1138,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteUserAccount = (userId: string) => {
     if (userId === 'admin-dean') return;
     setUsers(prev => prev.filter(u => u.id !== userId));
+  };
+
+  const updateUserProfilePhoto = async (userId: string, photoUrl: string) => {
+    setUsers(prev =>
+      prev.map(u => (u.id === userId ? { ...u, avatarUrl: photoUrl, registeredFacePhotoUrl: photoUrl } : u))
+    );
+    if (currentUser.id === userId) {
+      setCurrentUser(prev => ({ ...prev, avatarUrl: photoUrl, registeredFacePhotoUrl: photoUrl }));
+    }
+    try {
+      await updateDoc(doc(db, 'users', userId), {
+        avatarUrl: photoUrl,
+        registeredFacePhotoUrl: photoUrl,
+      });
+      await updateDoc(doc(db, 'students', userId), {
+        registeredFacePhotoUrl: photoUrl,
+      }).catch(() => {});
+    } catch (e: any) {
+      console.warn('Firestore profile photo update notice:', e?.message);
+    }
   };
 
   const login = (identifier: string, password: string, rememberMe: boolean = true): { success: boolean; message?: string } => {
@@ -996,13 +1204,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem(STORAGE_PREFIX + 'currentUserId', matchedUser.id);
     }
 
+    // Attempt background Firebase Auth authentication
+    loginWithFirebase(identifier, password).catch(e => console.warn('Firebase Auth sign-in notice:', e?.message));
+
     return { success: true };
   };
 
   const logout = () => {
     setIsAuthenticated(false);
     localStorage.removeItem(STORAGE_PREFIX + 'isAuthenticated');
+    logoutFromFirebase().catch(e => console.warn('Firebase Auth sign-out notice:', e?.message));
   };
+
+  const studentsList = users.filter(u => u.role === 'student');
+  const facultyList = users.filter(u => u.role === 'faculty');
 
   return (
     <AppContext.Provider
@@ -1013,6 +1228,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isAuthenticated,
         login,
         logout,
+        firebaseConnected,
+        firebaseLatency,
+        firebaseError,
+        recheckFirebaseConnection,
+        studentsList,
+        facultyList,
         academicYears,
         programs,
         semesters,
@@ -1071,6 +1292,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         batchCreateStudents,
         resetUserPassword,
         deleteUserAccount,
+        updateUserProfilePhoto,
         resetToDefaults,
       }}
     >
