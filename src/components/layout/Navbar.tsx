@@ -9,10 +9,11 @@ import {
   ChevronDown,
   Sparkles,
   Info,
+  LogOut,
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
-  const { currentUser, setCurrentUser, availableUsers, resetToDefaults } = useApp();
+  const { currentUser, setCurrentUser, availableUsers, resetToDefaults, logout } = useApp();
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [showDemoInfo, setShowDemoInfo] = useState(false);
 
@@ -40,8 +41,8 @@ export const Navbar: React.FC = () => {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-slate-900 text-base tracking-tight">
-                  Smart Attendance & Engagement Analytics
+                <span className="font-bold text-[#162b78] text-[17px] font-[Verdana] tracking-tight italic">
+                  Attendly AI
                 </span>
                 <span className="hidden sm:inline-block px-2 py-0.5 text-[10px] uppercase font-semibold tracking-wider rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
                   Institute System
@@ -105,6 +106,17 @@ export const Navbar: React.FC = () => {
                   <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-slate-600" />
                 </div>
               </div>
+            </button>
+
+            {/* Sign Out Button */}
+            <button
+              type="button"
+              onClick={logout}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
+              title="Sign out of current account"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sign Out</span>
             </button>
           </div>
         </div>
@@ -270,11 +282,22 @@ export const Navbar: React.FC = () => {
               </div>
             </div>
 
-            <div className="p-3 bg-slate-50 border-t border-slate-100 text-right">
+            <div className="p-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRoleModal(false);
+                  logout();
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 border border-transparent hover:border-rose-200 rounded-md transition-colors cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out of Account</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setShowRoleModal(false)}
-                className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50"
+                className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 cursor-pointer"
               >
                 Close
               </button>

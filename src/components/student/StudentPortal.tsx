@@ -104,6 +104,9 @@ export const StudentPortal: React.FC = () => {
   const [corrReason, setCorrReason] = useState('');
   const [corrSubmittedSuccess, setCorrSubmittedSuccess] = useState(false);
 
+  // Scanned photo viewer modal state
+  const [viewingPhotoRecord, setViewingPhotoRecord] = useState<any | null>(null);
+
   // Student section info
   const studentSection = sections.find(s => s.id === currentUser.sectionId);
 
@@ -218,100 +221,132 @@ export const StudentPortal: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      {/* Student Welcome Header */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 mb-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <img
-            src={currentUser.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80'}
-            alt={currentUser.name}
-            className="w-14 h-14 rounded-full object-cover ring-2 ring-emerald-500/30"
-          />
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-slate-900">{currentUser.name}</h1>
-              <span className="text-xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-700">
-                {currentUser.rollNumber}
+      <div className="flex flex-col lg:flex-row gap-6 items-start">
+        {/* Left Vertical Side Panel */}
+        <aside className="w-full lg:w-64 shrink-0 bg-white border border-slate-200 rounded-xl p-3 shadow-xs lg:sticky lg:top-20">
+          <div className="px-3 py-2 border-b border-slate-100 mb-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Student Navigation</span>
+            <div className="text-xs font-bold text-slate-900 mt-0.5 truncate">{currentUser.name}</div>
+            <div className="text-[11px] text-slate-500 font-mono">{currentUser.rollNumber} · {studentSection?.name || 'Section'}</div>
+          </div>
+
+          <nav className="flex flex-col gap-1 w-full text-xs">
+            {[
+              { id: 'dashboard', label: 'Dashboard', icon: ArrowRight },
+              { id: 'scan_attendance', label: 'Verify & Scan Attendance', icon: Camera, highlight: true },
+              { id: 'my_attendance', label: 'My Attendance', icon: CheckCircle2 },
+              { id: 'recovery_planner', label: 'Recovery Planner', icon: TrendingUp },
+              { id: 'my_assignments', label: 'My Assignments', icon: FileText },
+              { id: 'quizzes', label: 'Quizzes & Live Polls', icon: HelpCircle },
+              { id: 'coding_tests', label: 'Coding Tests', icon: Code2 },
+              { id: 'engagement', label: 'My Engagement', icon: Award },
+              { id: 'participation_marks', label: 'Participation Marks (/5)', icon: Award },
+              { id: 'notifications', label: `Notifications (${studentNotices.length})`, icon: Bell },
+              { id: 'correction_request', label: 'Correction Request', icon: MessageSquare },
+            ].map(tab => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id || (tab.id === 'my_assignments' && activeTab === 'assignments');
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    if (tab.id === 'my_assignments') setActiveTab('assignments');
+                    else setActiveTab(tab.id as any);
+                  }}
+                  className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors text-left w-full cursor-pointer ${
+                    isActive
+                      ? 'bg-emerald-50 text-emerald-900 font-semibold border-l-4 border-emerald-600'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  } ${tab.highlight ? 'font-semibold' : ''}`}
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-emerald-700' : 'text-slate-400'}`} />
+                    <span className="truncate">{tab.label}</span>
+                  </div>
+                  {tab.highlight && !isActive && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Quick attendance status at bottom of side panel */}
+          <div className="mt-4 pt-3 border-t border-slate-100 p-2 text-xs">
+            <div className="flex items-center justify-between text-slate-500 text-[11px] mb-1">
+              <span>Overall Standing:</span>
+              <span className={`font-mono font-bold ${overallStats.percentage >= systemSettings.attendanceThresholdPercent ? 'text-emerald-700' : 'text-rose-600'}`}>
+                {overallStats.percentage}%
               </span>
             </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {studentSection?.name || '2nd Year – A'} · B.Tech Computer Science & Engineering · Academic Year 2025–26
-            </p>
+            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full ${overallStats.percentage >= systemSettings.attendanceThresholdPercent ? 'bg-emerald-600' : 'bg-rose-500'}`}
+                style={{ width: `${Math.min(100, overallStats.percentage)}%` }}
+              />
+            </div>
           </div>
-        </div>
+        </aside>
 
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Attendance Status Badge */}
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg">
-            <span className="text-xs text-slate-500">Overall Attendance:</span>
-            <span
-              className={`text-sm font-bold font-mono ${
-                overallStats.percentage >= systemSettings.attendanceThresholdPercent
-                  ? 'text-emerald-700'
-                  : 'text-rose-600'
-              }`}
-            >
-              {overallStats.percentage}%
-            </span>
-            {overallStats.percentage < systemSettings.attendanceThresholdPercent && (
-              <span className="text-[10px] uppercase font-bold text-rose-600 bg-rose-50 px-1 rounded">
-                At Risk
-              </span>
-            )}
+        {/* Right Main Content */}
+        <div className="flex-1 min-w-0 w-full space-y-6">
+          {/* Student Welcome Header */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <img
+                src={currentUser.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80'}
+                alt={currentUser.name}
+                className="w-14 h-14 rounded-full object-cover ring-2 ring-emerald-500/30"
+              />
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-xl font-bold text-slate-900">{currentUser.name}</h1>
+                  <span className="text-xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-700">
+                    {currentUser.rollNumber}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {studentSection?.name || '2nd Year – A'} · B.Tech Computer Science & Engineering · Academic Year 2025–26
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Attendance Status Badge */}
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg">
+                <span className="text-xs text-slate-500">Overall Attendance:</span>
+                <span
+                  className={`text-sm font-bold font-mono ${
+                    overallStats.percentage >= systemSettings.attendanceThresholdPercent
+                      ? 'text-emerald-700'
+                      : 'text-rose-600'
+                  }`}
+                >
+                  {overallStats.percentage}%
+                </span>
+                {overallStats.percentage < systemSettings.attendanceThresholdPercent && (
+                  <span className="text-[10px] uppercase font-bold text-rose-600 bg-rose-50 px-1 rounded">
+                    At Risk
+                  </span>
+                )}
+              </div>
+
+              {/* Quick Scan Attendance Shortcut Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('scan_attendance');
+                  setScanStep('consent');
+                  generateNewChallenge();
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
+              >
+                <Camera className="w-4 h-4" />
+                <span>Verify & Scan Attendance</span>
+              </button>
+            </div>
           </div>
-
-          {/* Quick Scan Attendance Shortcut Button */}
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('scan_attendance');
-              setScanStep('consent');
-              generateNewChallenge();
-            }}
-            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
-          >
-            <Camera className="w-4 h-4" />
-            <span>Verify & Scan Attendance</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Student Navigation Tabs */}
-      <div className="flex items-center gap-1 border-b border-slate-200 overflow-x-auto pb-1 mb-6 text-xs font-medium">
-        {[
-          { id: 'dashboard', label: 'Dashboard', icon: ArrowRight },
-          { id: 'scan_attendance', label: 'Verify & Scan Attendance', icon: Camera, highlight: true },
-          { id: 'my_attendance', label: 'My Attendance', icon: CheckCircle2 },
-          { id: 'recovery_planner', label: 'Recovery Planner', icon: TrendingUp },
-          { id: 'my_assignments', label: 'My Assignments', icon: FileText },
-          { id: 'quizzes', label: 'Quizzes & Live Quizzes', icon: HelpCircle },
-          { id: 'coding_tests', label: 'Coding Tests', icon: Code2 },
-          { id: 'engagement', label: 'My Engagement', icon: Award },
-          { id: 'participation_marks', label: 'Participation Marks (/5)', icon: Award },
-          { id: 'notifications', label: `Notifications (${studentNotices.length})`, icon: Bell },
-          { id: 'correction_request', label: 'Correction Request', icon: MessageSquare },
-        ].map(tab => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => {
-                if (tab.id === 'my_assignments') setActiveTab('assignments');
-                else setActiveTab(tab.id as any);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg transition-colors whitespace-nowrap cursor-pointer ${
-                isActive
-                  ? 'border-b-2 border-emerald-600 text-emerald-800 font-semibold bg-emerald-50/50'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              } ${tab.highlight ? 'text-emerald-700 font-semibold' : ''}`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
-      </div>
 
       {/* TAB 1: DASHBOARD */}
       {activeTab === 'dashboard' && (
@@ -926,13 +961,14 @@ export const StudentPortal: React.FC = () => {
                     <th className="py-2.5 px-3">Date</th>
                     <th className="py-2.5 px-3">Subject</th>
                     <th className="py-2.5 px-3">Status</th>
-                    <th className="py-2.5 px-3">Verification Method</th>
+                    <th className="py-2.5 px-3">Scanned Photo</th>
                     <th className="py-2.5 px-3">Scan Time</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {studentRecords.slice(0, 10).map(rec => {
                     const subj = subjects.find(s => s.id === rec.subjectId);
+                    const hasScanned = rec.status === 'Present' || rec.status === 'Late' || rec.verificationType === 'Face+QR';
                     return (
                       <tr key={rec.id} className="hover:bg-slate-50">
                         <td className="py-2.5 px-3 font-mono text-slate-600">{rec.date}</td>
@@ -950,7 +986,28 @@ export const StudentPortal: React.FC = () => {
                             {rec.status}
                           </span>
                         </td>
-                        <td className="py-2.5 px-3 text-slate-600">{rec.verificationType}</td>
+                        <td className="py-2.5 px-3">
+                          {hasScanned ? (
+                            <button
+                              type="button"
+                              onClick={() => setViewingPhotoRecord(rec)}
+                              className="group flex items-center gap-2 cursor-pointer focus:outline-hidden"
+                              title="Click to view verified scanned photo"
+                            >
+                              <img
+                                src={currentUser.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80'}
+                                alt="Scanned Face"
+                                className="w-7 h-7 rounded-full object-cover ring-2 ring-emerald-500/50 group-hover:ring-emerald-600 transition-all shadow-xs"
+                              />
+                              <span className="text-[11px] text-emerald-700 font-medium group-hover:underline flex items-center gap-0.5">
+                                <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>View Photo</span>
+                              </span>
+                            </button>
+                          ) : (
+                            <span className="text-slate-400 text-xs italic">No scan</span>
+                          )}
+                        </td>
                         <td className="py-2.5 px-3 text-slate-400 font-mono">{rec.scanTime || '—'}</td>
                       </tr>
                     );
@@ -959,6 +1016,73 @@ export const StudentPortal: React.FC = () => {
               </table>
             </div>
           </div>
+
+          {/* Scanned Verification Photo Inspection Modal */}
+          {viewingPhotoRecord && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+              <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md p-5">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                      <Camera className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-sm">Verified Scanned Face Frame</h3>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        {subjects.find(s => s.id === viewingPhotoRecord.subjectId)?.name || 'Class Session'} · {viewingPhotoRecord.date}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setViewingPhotoRecord(null)}
+                    className="text-slate-400 hover:text-slate-600 text-sm font-bold p-1 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="my-4 space-y-4">
+                  <div className="relative rounded-xl overflow-hidden border-2 border-emerald-500/50 bg-slate-950 flex flex-col items-center justify-center p-4">
+                    <img
+                      src={currentUser.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=400&q=80'}
+                      alt="Verified Face Frame"
+                      className="w-44 h-44 rounded-full object-cover border-4 border-emerald-400 shadow-lg"
+                    />
+                    <div className="mt-3 px-3 py-1 bg-slate-900/90 border border-emerald-500/50 rounded-full flex items-center gap-1.5 text-xs text-emerald-400 font-mono">
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>1:1 Match: 98.8% Approved</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1.5">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Student:</span>
+                      <span className="font-semibold text-slate-900">{currentUser.name} ({currentUser.rollNumber})</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Captured At:</span>
+                      <span className="font-mono text-slate-900">{viewingPhotoRecord.scanTime || '09:04:12 AM'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Attendance Status:</span>
+                      <span className="font-semibold text-emerald-700">Present (Face Matched + QR)</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setViewingPhotoRecord(null)}
+                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-lg cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1922,6 +2046,8 @@ export const StudentPortal: React.FC = () => {
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 };

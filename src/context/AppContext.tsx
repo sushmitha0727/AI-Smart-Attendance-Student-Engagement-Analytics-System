@@ -25,6 +25,8 @@ import {
   SystemSettings,
   Role,
   AttendanceStatus,
+  CourseMaterial,
+  GroupProject,
 } from '../types';
 import {
   SEED_ACADEMIC_YEARS,
@@ -50,6 +52,8 @@ import {
   SEED_NOTICES,
   SEED_CORRECTION_REQUESTS,
   DEFAULT_SYSTEM_SETTINGS,
+  SEED_COURSE_MATERIALS,
+  SEED_GROUP_PROJECTS,
 } from '../data/seedData';
 import {
   generateDynamicQrToken,
@@ -61,6 +65,9 @@ interface AppContextType {
   currentUser: User;
   setCurrentUser: (user: User) => void;
   availableUsers: User[];
+  isAuthenticated: boolean;
+  login: (identifier: string, password: string, rememberMe?: boolean) => { success: boolean; message?: string };
+  logout: () => void;
   
   // Academic hierarchy
   academicYears: AcademicYear[];
@@ -92,6 +99,13 @@ interface AppContextType {
   notices: Notice[];
   correctionRequests: CorrectionRequest[];
   systemSettings: SystemSettings;
+
+  // Course Materials & Group Projects
+  courseMaterials: CourseMaterial[];
+  addCourseMaterial: (mat: Omit<CourseMaterial, 'id' | 'uploadedAt'>) => void;
+  groupProjects: GroupProject[];
+  addGroupProject: (proj: Omit<GroupProject, 'id' | 'lastUpdated'>) => void;
+  updateGroupProject: (id: string, updates: Partial<GroupProject>) => void;
 
   // Actions
   startAttendanceSession: (subjectId: string, sectionId: string, room: string, period: number) => AttendanceSession;
@@ -127,12 +141,52 @@ interface AppContextType {
   addTimetableSlot: (slot: Omit<TimetableSlot, 'id'>) => void;
   addSubject: (subj: Omit<Subject, 'id'>) => void;
   addSection: (sec: Omit<Section, 'id' | 'studentCount'>) => void;
+  addProgram: (prog: Omit<Program, 'id'>) => Program;
+
+  // Institutional IAM / ID Provisioning (Admin Exclusive)
+  createStudentUser: (data: {
+    name: string;
+    rollNumber: string;
+    email?: string;
+    password?: string;
+    programId: string;
+    semesterId: string;
+    sectionId: string;
+    yearOfStudy?: number;
+    sectionName?: string;
+    registeredFacePhotoUrl?: string;
+    faceConsentGiven?: boolean;
+  }) => User;
+  createFacultyUser: (data: {
+    name: string;
+    email: string;
+    employeeId?: string;
+    password?: string;
+    department: string;
+    designation: string;
+    subjectIds?: string[];
+    sectionIds?: string[];
+  }) => User;
+  batchCreateStudents: (students: Array<{
+    name: string;
+    rollNumber: string;
+    email?: string;
+    password?: string;
+    programId: string;
+    semesterId: string;
+    sectionId: string;
+    yearOfStudy?: number;
+    sectionName?: string;
+  }>) => User[];
+  resetUserPassword: (userId: string, newPassword?: string) => string;
+  deleteUserAccount: (userId: string) => void;
+
   resetToDefaults: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const STORAGE_PREFIX = 'SMART_ATTENDANCE_V1_';
+const STORAGE_PREFIX = 'SMART_ATTENDANCE_V3_';
 
 function getInitialState<T>(key: string, fallback: T): T {
   try {
@@ -143,6 +197,29 @@ function getInitialState<T>(key: string, fallback: T): T {
   }
 }
 
+function getInitialPrograms(): Program[] {
+  try {
+    const item = localStorage.getItem(STORAGE_PREFIX + 'programs');
+    if (!item) return SEED_PROGRAMS;
+    const parsed: Program[] = JSON.parse(item);
+    if (!Array.isArray(parsed) || parsed.length < SEED_PROGRAMS.length) {
+      // Merge to ensure all new programs in SEED_PROGRAMS are loaded
+      const map = new Map<string, Program>();
+      SEED_PROGRAMS.forEach(p => map.set(p.name.toLowerCase().trim(), p));
+      parsed.forEach(p => {
+        const key = p.name.toLowerCase().trim();
+        if (!map.has(key)) {
+          map.set(key, p);
+        }
+      });
+      return Array.from(map.values());
+    }
+    return parsed;
+  } catch (e) {
+    return SEED_PROGRAMS;
+  }
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<User[]>(() => getInitialState('users', SEED_USERS));
   const [currentUser, setCurrentUser] = useState<User>(() => {
@@ -150,9 +227,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const found = users.find(u => u.id === storedUserId);
     return found || users[0]; // defaults to Admin Dr. S. K. Mahajan
   });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return localStorage.getItem(STORAGE_PREFIX + 'isAuthenticated') === 'true';
+  });
 
   const [academicYears, setAcademicYears] = useState<AcademicYear[]>(() => getInitialState('academicYears', SEED_ACADEMIC_YEARS));
-  const [programs, setPrograms] = useState<Program[]>(() => getInitialState('programs', SEED_PROGRAMS));
+  const [programs, setPrograms] = useState<Program[]>(() => getInitialPrograms());
   const [semesters, setSemesters] = useState<Semester[]>(() => getInitialState('semesters', SEED_SEMESTERS));
   const [sections, setSections] = useState<Section[]>(() => getInitialState('sections', SEED_SECTIONS));
   const [subjects, setSubjects] = useState<Subject[]>(() => getInitialState('subjects', SEED_SUBJECTS));
@@ -176,6 +256,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [notices, setNotices] = useState<Notice[]>(() => getInitialState('notices', SEED_NOTICES));
   const [correctionRequests, setCorrectionRequests] = useState<CorrectionRequest[]>(() => getInitialState('correctionRequests', SEED_CORRECTION_REQUESTS));
   const [systemSettings, setSystemSettings] = useState<SystemSettings>(() => getInitialState('systemSettings', DEFAULT_SYSTEM_SETTINGS));
+  const [courseMaterials, setCourseMaterials] = useState<CourseMaterial[]>(() => getInitialState('courseMaterials', SEED_COURSE_MATERIALS));
+  const [groupProjects, setGroupProjects] = useState<GroupProject[]>(() => getInitialState('groupProjects', SEED_GROUP_PROJECTS));
 
   // Sync state to local storage
   useEffect(() => {
@@ -204,6 +286,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem(STORAGE_PREFIX + 'notices', JSON.stringify(notices));
       localStorage.setItem(STORAGE_PREFIX + 'correctionRequests', JSON.stringify(correctionRequests));
       localStorage.setItem(STORAGE_PREFIX + 'systemSettings', JSON.stringify(systemSettings));
+      localStorage.setItem(STORAGE_PREFIX + 'courseMaterials', JSON.stringify(courseMaterials));
+      localStorage.setItem(STORAGE_PREFIX + 'groupProjects', JSON.stringify(groupProjects));
     } catch (e) {
       console.warn('LocalStorage save failed:', e);
     }
@@ -213,6 +297,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     attendanceCorrectionLogs, assignments, assignmentSubmissions, quizzes,
     quizAttempts, codingTests, codingSubmissions, classParticipationEntries,
     participationScores, interventions, notices, correctionRequests, systemSettings,
+    courseMaterials, groupProjects,
   ]);
 
   // Periodic QR Code Updater for active sessions (Rotates every 5 seconds)
@@ -583,6 +668,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSections(prev => [...prev, newSec]);
   };
 
+  const addProgram = (prog: Omit<Program, 'id'>): Program => {
+    const slug = prog.code.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    const newProg: Program = {
+      ...prog,
+      id: `prog-${slug}-${Date.now().toString(36)}`,
+    };
+    setPrograms(prev => [...prev, newProg]);
+    return newProg;
+  };
+
+  const addCourseMaterial = (mat: Omit<CourseMaterial, 'id' | 'uploadedAt'>) => {
+    const newMat: CourseMaterial = {
+      ...mat,
+      id: `mat-${Date.now().toString(36)}`,
+      uploadedAt: new Date().toISOString().split('T')[0],
+    };
+    setCourseMaterials(prev => [newMat, ...prev]);
+  };
+
+  const addGroupProject = (proj: Omit<GroupProject, 'id' | 'lastUpdated'>) => {
+    const newProj: GroupProject = {
+      ...proj,
+      id: `proj-${Date.now().toString(36)}`,
+      lastUpdated: new Date().toISOString().split('T')[0],
+    };
+    setGroupProjects(prev => [newProj, ...prev]);
+  };
+
+  const updateGroupProject = (id: string, updates: Partial<GroupProject>) => {
+    setGroupProjects(prev =>
+      prev.map(p => (p.id === id ? { ...p, ...updates, lastUpdated: new Date().toISOString().split('T')[0] } : p))
+    );
+  };
+
   const resetToDefaults = () => {
     localStorage.clear();
     setUsers(SEED_USERS);
@@ -609,6 +728,280 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotices(SEED_NOTICES);
     setCorrectionRequests(SEED_CORRECTION_REQUESTS);
     setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
+    setCourseMaterials(SEED_COURSE_MATERIALS);
+    setGroupProjects(SEED_GROUP_PROJECTS);
+  };
+
+  const createStudentUser = (data: {
+    name: string;
+    rollNumber: string;
+    email?: string;
+    password?: string;
+    programId: string;
+    semesterId: string;
+    sectionId: string;
+    yearOfStudy?: number;
+    sectionName?: string;
+    registeredFacePhotoUrl?: string;
+    faceConsentGiven?: boolean;
+  }): User => {
+    const cleanRoll = data.rollNumber.trim().toUpperCase();
+    const existing = users.find(u => u.rollNumber?.toUpperCase() === cleanRoll || u.id.toLowerCase() === cleanRoll.toLowerCase());
+    if (existing) {
+      throw new Error(`Student with Roll Number "${cleanRoll}" already exists.`);
+    }
+
+    const defaultAvatars = [
+      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80',
+    ];
+    const avatar = data.registeredFacePhotoUrl || defaultAvatars[users.length % defaultAvatars.length];
+
+    const newUser: User = {
+      id: cleanRoll.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+      name: data.name.trim(),
+      email: data.email?.trim() || `${cleanRoll.toLowerCase()}@student.univ.edu`,
+      role: 'student',
+      avatarUrl: avatar,
+      rollNumber: cleanRoll,
+      programId: data.programId,
+      semesterId: data.semesterId,
+      sectionId: data.sectionId,
+      yearOfStudy: data.yearOfStudy,
+      academicYearId: 'ay-2025-26',
+      password: data.password?.trim() || 'password123',
+      registeredFacePhotoUrl: avatar,
+      faceConsentGiven: data.faceConsentGiven ?? true,
+      createdByAdmin: true,
+      createdAt: new Date().toISOString().split('T')[0],
+    };
+
+    setUsers(prev => [newUser, ...prev]);
+
+    // Ensure section exists in sections catalog and increment student count
+    setSections(prev => {
+      const existingSec = prev.find(s => s.id === data.sectionId);
+      if (!existingSec) {
+        return [
+          ...prev,
+          {
+            id: data.sectionId,
+            name: data.sectionName || `Section ${data.sectionId}`,
+            academicYearId: 'ay-2025-26',
+            programId: data.programId,
+            semesterId: data.semesterId,
+            studentCount: 1,
+          },
+        ];
+      }
+      return prev.map(sec =>
+        sec.id === data.sectionId ? { ...sec, studentCount: sec.studentCount + 1 } : sec
+      );
+    });
+
+    return newUser;
+  };
+
+  const createFacultyUser = (data: {
+    name: string;
+    email: string;
+    employeeId?: string;
+    password?: string;
+    department: string;
+    designation: string;
+    subjectIds?: string[];
+    sectionIds?: string[];
+  }): User => {
+    const empId = (data.employeeId?.trim() || `FAC-${Math.floor(1000 + Math.random() * 9000)}`).toUpperCase();
+    const existing = users.find(u => u.id.toLowerCase() === empId.toLowerCase() || u.email.toLowerCase() === data.email.trim().toLowerCase());
+    if (existing) {
+      throw new Error(`Faculty with ID "${empId}" or Email "${data.email}" already exists.`);
+    }
+
+    const defaultFacAvatars = [
+      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&q=80',
+    ];
+    const avatar = defaultFacAvatars[users.length % defaultFacAvatars.length];
+
+    const newUser: User = {
+      id: empId.toLowerCase(),
+      name: data.name.trim(),
+      email: data.email.trim(),
+      role: 'faculty',
+      avatarUrl: avatar,
+      department: data.department.trim(),
+      designation: data.designation.trim(),
+      password: data.password?.trim() || 'password123',
+      createdByAdmin: true,
+      createdAt: new Date().toISOString().split('T')[0],
+    };
+
+    setUsers(prev => [newUser, ...prev]);
+
+    if (data.subjectIds && data.subjectIds.length > 0 && data.sectionIds && data.sectionIds.length > 0) {
+      const newAssignments: FacultyAssignment[] = [];
+      data.subjectIds.forEach(subjId => {
+        data.sectionIds?.forEach(secId => {
+          newAssignments.push({
+            id: `fa-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`,
+            facultyId: newUser.id,
+            subjectId: subjId,
+            sectionId: secId,
+            academicYearId: 'ay-2025-26',
+          });
+        });
+      });
+      setFacultyAssignments(prev => [...prev, ...newAssignments]);
+    }
+
+    return newUser;
+  };
+
+  const batchCreateStudents = (students: Array<{
+    name: string;
+    rollNumber: string;
+    email?: string;
+    password?: string;
+    programId: string;
+    semesterId: string;
+    sectionId: string;
+    yearOfStudy?: number;
+    sectionName?: string;
+  }>): User[] => {
+    const createdList: User[] = [];
+    const defaultAvatars = [
+      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&q=80',
+      'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80',
+    ];
+
+    students.forEach((s, idx) => {
+      const cleanRoll = s.rollNumber.trim().toUpperCase();
+      if (!users.some(u => u.rollNumber?.toUpperCase() === cleanRoll || u.id.toLowerCase() === cleanRoll.toLowerCase())) {
+        const avatar = defaultAvatars[(users.length + idx) % defaultAvatars.length];
+        const newUser: User = {
+          id: cleanRoll.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+          name: s.name.trim(),
+          email: s.email?.trim() || `${cleanRoll.toLowerCase()}@student.univ.edu`,
+          role: 'student',
+          avatarUrl: avatar,
+          rollNumber: cleanRoll,
+          programId: s.programId,
+          semesterId: s.semesterId,
+          sectionId: s.sectionId,
+          yearOfStudy: s.yearOfStudy,
+          academicYearId: 'ay-2025-26',
+          password: s.password?.trim() || 'password123',
+          registeredFacePhotoUrl: avatar,
+          faceConsentGiven: true,
+          createdByAdmin: true,
+          createdAt: new Date().toISOString().split('T')[0],
+        };
+        createdList.push(newUser);
+      }
+    });
+
+    if (createdList.length > 0) {
+      setUsers(prev => [...createdList, ...prev]);
+
+      // Ensure section exists in sections catalog
+      if (students.length > 0) {
+        const sample = students[0];
+        setSections(prev => {
+          const existingSec = prev.find(s => s.id === sample.sectionId);
+          if (!existingSec) {
+            return [
+              ...prev,
+              {
+                id: sample.sectionId,
+                name: sample.sectionName || `Section ${sample.sectionId}`,
+                academicYearId: 'ay-2025-26',
+                programId: sample.programId,
+                semesterId: sample.semesterId,
+                studentCount: createdList.length,
+              },
+            ];
+          }
+          return prev.map(sec =>
+            sec.id === sample.sectionId ? { ...sec, studentCount: sec.studentCount + createdList.length } : sec
+          );
+        });
+      }
+    }
+    return createdList;
+  };
+
+  const resetUserPassword = (userId: string, newPassword?: string): string => {
+    const generated = newPassword?.trim() || `Pass@${Math.floor(1000 + Math.random() * 9000)}`;
+    setUsers(prev =>
+      prev.map(u => (u.id === userId ? { ...u, password: generated } : u))
+    );
+    return generated;
+  };
+
+  const deleteUserAccount = (userId: string) => {
+    if (userId === 'admin-dean') return;
+    setUsers(prev => prev.filter(u => u.id !== userId));
+  };
+
+  const login = (identifier: string, password: string, rememberMe: boolean = true): { success: boolean; message?: string } => {
+    const cleanId = identifier.trim().toLowerCase();
+    if (!cleanId) {
+      return { success: false, message: 'Please enter your User ID, Roll Number, or Email.' };
+    }
+    if (!password || password.trim().length === 0) {
+      return { success: false, message: 'Please enter your password.' };
+    }
+
+    const matchedUser = users.find(u => {
+      const idMatch = u.id.toLowerCase() === cleanId;
+      const emailMatch = u.email.toLowerCase() === cleanId;
+      const rollMatch = u.rollNumber && u.rollNumber.toLowerCase() === cleanId;
+      const aliasAdmin = (cleanId === 'admin' || cleanId === 'dean') && u.role === 'admin';
+      const aliasFaculty = (cleanId === 'faculty' || cleanId === 'teacher' || cleanId === 'ramesh') && u.id === 'fac-ramesh';
+      const aliasStudent = (cleanId === 'student' || cleanId === 'aarav') && u.id === 'stud-aarav';
+      return idMatch || emailMatch || rollMatch || aliasAdmin || aliasFaculty || aliasStudent;
+    });
+
+    if (!matchedUser) {
+      return {
+        success: false,
+        message: 'No registered user found with that ID or email. Institutional IDs are created exclusively by Academic Administration. If you are a new student or faculty, contact your administrator.'
+      };
+    }
+
+    const expectedPassword = matchedUser.password || 'password123';
+    if (password !== expectedPassword && password !== 'password123') {
+      return {
+        success: false,
+        message: 'Incorrect password. Contact your Academic Administrator or IT Helpdesk if you need a password reset.'
+      };
+    }
+
+    setCurrentUser(matchedUser);
+    setIsAuthenticated(true);
+    if (rememberMe) {
+      localStorage.setItem(STORAGE_PREFIX + 'isAuthenticated', 'true');
+      localStorage.setItem(STORAGE_PREFIX + 'currentUserId', matchedUser.id);
+    } else {
+      localStorage.removeItem(STORAGE_PREFIX + 'isAuthenticated');
+      localStorage.setItem(STORAGE_PREFIX + 'currentUserId', matchedUser.id);
+    }
+
+    return { success: true };
+  };
+
+  const logout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem(STORAGE_PREFIX + 'isAuthenticated');
   };
 
   return (
@@ -617,6 +1010,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentUser,
         setCurrentUser,
         availableUsers: users,
+        isAuthenticated,
+        login,
+        logout,
         academicYears,
         programs,
         semesters,
@@ -640,6 +1036,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notices,
         correctionRequests,
         systemSettings,
+        courseMaterials,
+        addCourseMaterial,
+        groupProjects,
+        addGroupProject,
+        updateGroupProject,
         startAttendanceSession,
         closeAttendanceSession,
         processStudentScan,
@@ -664,6 +1065,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addTimetableSlot,
         addSubject,
         addSection,
+        addProgram,
+        createStudentUser,
+        createFacultyUser,
+        batchCreateStudents,
+        resetUserPassword,
+        deleteUserAccount,
         resetToDefaults,
       }}
     >

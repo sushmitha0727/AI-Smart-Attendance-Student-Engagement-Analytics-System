@@ -5,8 +5,14 @@ import { AdminPortal } from './components/admin/AdminPortal';
 import { FacultyPortal } from './components/faculty/FacultyPortal';
 import { StudentPortal } from './components/student/StudentPortal';
 
+import { LoginPage } from './components/auth/LoginPage';
+
 const AppContent: React.FC = () => {
-  const { currentUser } = useApp();
+  const { currentUser, isAuthenticated } = useApp();
+
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">

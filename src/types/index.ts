@@ -8,12 +8,18 @@ export interface User {
   avatarUrl: string;
   department?: string;
   designation?: string;
+  employeeId?: string;
+  password?: string;
+  createdByAdmin?: boolean;
+  createdAt?: string;
+  lastLogin?: string;
   // Student specific
   rollNumber?: string;
   programId?: string;
   semesterId?: string;
   sectionId?: string;
   academicYearId?: string;
+  yearOfStudy?: number;
   registeredFacePhotoUrl?: string;
   faceConsentGiven?: boolean;
 }
@@ -31,6 +37,9 @@ export interface Program {
   name: string; // e.g. "B.Tech Computer Science & Engineering"
   code: string;
   durationYears: number;
+  department?: string;
+  category?: string;
+  degree?: string;
 }
 
 export interface Semester {
@@ -248,6 +257,34 @@ export interface EngagementAnalytics {
   quizRate: number;
   codingRate: number;
   participationPoints: number;
+}
+
+export interface CourseMaterial {
+  id: string;
+  subjectId: string;
+  sectionId: string;
+  facultyId: string;
+  title: string;
+  type: 'Lecture Notes' | 'Slides' | 'Lab Manual' | 'Dataset' | 'Reference Paper';
+  fileUrl: string;
+  fileSize: string;
+  uploadedAt: string;
+}
+
+export interface GroupProject {
+  id: string;
+  subjectId: string;
+  sectionId: string;
+  facultyId: string;
+  teamName: string;
+  projectTitle: string;
+  members: string[];
+  status: 'In Progress' | 'Review Ready' | 'Evaluated';
+  githubUrl?: string;
+  score?: number;
+  maxScore: number;
+  feedback?: string;
+  lastUpdated: string;
 }
 
 export interface ParticipationScoreRubric {

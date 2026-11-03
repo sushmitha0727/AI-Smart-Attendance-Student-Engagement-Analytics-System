@@ -16,8 +16,19 @@ import {
   AlertTriangle,
   RotateCcw,
   Sparkles,
+  IdCard,
+  UserPlus,
+  Search,
+  Filter,
+  Building2,
 } from 'lucide-react';
 import { calculateAttendanceStats } from '../../utils/academicCalculations';
+import { IdProvisioningManager } from './IdProvisioningManager';
+import {
+  generateStudentsCsv,
+  generateTeachersCsv,
+  triggerCsvDownload,
+} from '../../utils/csvExporter';
 
 export const AdminPortal: React.FC = () => {
   const {
@@ -40,10 +51,21 @@ export const AdminPortal: React.FC = () => {
     addTimetableSlot,
     addSubject,
     addSection,
+    addProgram,
   } = useApp();
+
+  const [showAddProgram, setShowAddProgram] = useState(false);
+  const [progSearch, setProgSearch] = useState('');
+  const [progCategoryFilter, setProgCategoryFilter] = useState('ALL');
+  const [newProgName, setNewProgName] = useState('');
+  const [newProgCode, setNewProgCode] = useState('');
+  const [newProgDuration, setNewProgDuration] = useState(4);
+  const [newProgDept, setNewProgDept] = useState('Department of Computer Science & Engineering');
+  const [newProgCategory, setNewProgCategory] = useState('Computer Science & Emerging AI');
 
   const [activeTab, setActiveTab] = useState<
     | 'dashboard'
+    | 'id_provisioning'
     | 'hierarchy'
     | 'faculty_assignments'
     | 'timetable'
@@ -67,6 +89,7 @@ export const AdminPortal: React.FC = () => {
   const [secName, setSecName] = useState('');
   const [secProg, setSecProg] = useState('prog-cse');
   const [secSem, setSecSem] = useState('sem-3');
+  const [secYear, setSecYear] = useState(1);
 
   // Faculty assignment builder
   const [assignFacultyId, setAssignFacultyId] = useState('');
@@ -95,66 +118,142 @@ export const AdminPortal: React.FC = () => {
   // Institution attendance aggregate
   const overallStats = calculateAttendanceStats(attendanceRecords);
 
+  const programCategories = Array.from(new Set(programs.map(p => p.category || 'General Programs'))).sort();
+  const filteredPrograms = programs.filter(p => {
+    const query = progSearch.toLowerCase().trim();
+    const matchSearch =
+      !query ||
+      p.name.toLowerCase().includes(query) ||
+      p.code.toLowerCase().includes(query) ||
+      (p.department && p.department.toLowerCase().includes(query));
+    const matchCat = progCategoryFilter === 'ALL' || (p.category || 'General Programs') === progCategoryFilter;
+    return matchSearch && matchCat;
+  });
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      {/* Admin Title Banner */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 mb-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold text-slate-900">Institutional Administration Portal</h1>
-            <span className="text-xs px-2 py-0.5 rounded font-semibold bg-purple-100 text-purple-800 border border-purple-200">
-              Dean & Controller Mode
-            </span>
+      <div className="flex flex-col lg:flex-row gap-6 items-start">
+        {/* Left Vertical Side Panel */}
+        <aside className="w-full lg:w-64 shrink-0 bg-white border border-slate-200 rounded-xl p-3 shadow-xs lg:sticky lg:top-20">
+          <div className="px-3 py-2 border-b border-slate-100 mb-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Admin Control</span>
+            <div className="text-xs font-bold text-slate-900 mt-0.5 truncate">{users.find(u => u.role === 'admin')?.name || 'Dr. S. K. Mahajan'}</div>
+            <div className="text-[11px] text-slate-500 truncate">Dean of Academic Affairs</div>
           </div>
-          <p className="text-xs text-slate-500 mt-1">
-            Institution Hierarchy: Academic Year &rarr; Program &rarr; Semester &rarr; Section &rarr; Students &rarr; Subjects &rarr; Faculty Assignments
-          </p>
-        </div>
 
-        <div className="flex items-center gap-3">
-          <div className="px-3.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-            <span className="text-slate-500">Institution Attendance: </span>
-            <span className="font-mono font-bold text-slate-900">{overallStats.percentage}%</span>
+          <nav className="flex flex-col gap-1 w-full text-xs">
+            {[
+              { id: 'dashboard', label: 'Dashboard', icon: Layers },
+              { id: 'id_provisioning', label: 'ID & User Provisioning', icon: IdCard, badge: 'Admin Only' },
+              { id: 'hierarchy', label: 'Academic Structure', icon: BookOpen },
+              { id: 'faculty_assignments', label: 'Faculty Assignments', icon: Users },
+              { id: 'timetable', label: 'Timetable Manager', icon: Calendar },
+              { id: 'attendance_thresholds', label: 'Attendance Thresholds', icon: Sliders },
+              { id: 'rubric_settings', label: 'Participation Rubric', icon: FileCheck2 },
+              { id: 'assessments', label: 'Assessments Overview', icon: BookOpen },
+              { id: 'reports', label: 'Institutional Reports', icon: Download },
+              { id: 'audit_logs', label: `Audit & Privacy Logs (${attendanceCorrectionLogs.length})`, icon: Shield },
+            ].map(tab => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id as any)}
+                  className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors text-left w-full cursor-pointer ${
+                    isActive
+                      ? 'bg-purple-50 text-purple-900 font-semibold border-l-4 border-purple-600'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-purple-700' : 'text-slate-400'}`} />
+                    <span className="truncate">{tab.label}</span>
+                  </div>
+                  {(tab as any).badge && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded">
+                      {(tab as any).badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Institutional Stats Summary in Side Panel */}
+          <div className="mt-4 pt-3 border-t border-slate-100 p-2 text-xs">
+            <div className="flex items-center justify-between text-slate-500 text-[11px] mb-1">
+              <span>Institution Attendance:</span>
+              <span className="font-mono font-bold text-purple-700">{overallStats.percentage}%</span>
+            </div>
+            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-purple-700 rounded-full"
+                style={{ width: `${Math.min(100, overallStats.percentage)}%` }}
+              />
+            </div>
           </div>
-        </div>
-      </div>
+        </aside>
 
-      {/* Admin Navigation Tabs */}
-      <div className="flex items-center gap-1 border-b border-slate-200 overflow-x-auto pb-1 mb-6 text-xs font-medium">
-        {[
-          { id: 'dashboard', label: 'Dashboard', icon: Layers },
-          { id: 'hierarchy', label: 'Academic Structure', icon: BookOpen },
-          { id: 'faculty_assignments', label: 'Faculty Assignments', icon: Users },
-          { id: 'timetable', label: 'Timetable Manager', icon: Calendar },
-          { id: 'attendance_thresholds', label: 'Attendance Thresholds', icon: Sliders },
-          { id: 'rubric_settings', label: 'Participation Rubric', icon: FileCheck2 },
-          { id: 'assessments', label: 'Assessments Overview', icon: BookOpen },
-          { id: 'reports', label: 'Institutional Reports', icon: Download },
-          { id: 'audit_logs', label: `Audit & Privacy Logs (${attendanceCorrectionLogs.length})`, icon: Shield },
-        ].map(tab => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg transition-colors whitespace-nowrap cursor-pointer ${
-                isActive
-                  ? 'border-b-2 border-purple-600 text-purple-900 font-semibold bg-purple-50/50'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
-      </div>
+        {/* Right Main Content */}
+        <div className="flex-1 min-w-0 w-full space-y-6">
+          {/* Admin Title Banner */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold text-slate-900">Institutional Administration Portal</h1>
+                <span className="text-xs px-2 py-0.5 rounded font-semibold bg-purple-100 text-purple-800 border border-purple-200">
+                  Dean & Controller Mode
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Institution Hierarchy: Academic Year &rarr; Program &rarr; Semester &rarr; Section &rarr; Students &rarr; Subjects &rarr; Faculty Assignments
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="px-3.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs">
+                <span className="text-slate-500">Threshold: </span>
+                <span className="font-mono font-bold text-slate-900">{systemSettings.attendanceThresholdPercent}%</span>
+              </div>
+            </div>
+          </div>
+
+      {/* ID & USER PROVISIONING (ADMIN EXCLUSIVE) */}
+      {activeTab === 'id_provisioning' && <IdProvisioningManager />}
 
       {/* TAB 1: ADMIN DASHBOARD */}
       {activeTab === 'dashboard' && (
         <div className="space-y-6">
+          {/* Institutional IAM Callout */}
+          <div className="bg-gradient-to-r from-[#162b78] via-indigo-900 to-[#10205c] text-white rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs border border-blue-900/40">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center shrink-0">
+                <IdCard className="w-5 h-5 text-amber-300" />
+              </div>
+              <div>
+                <div className="text-xs font-bold flex items-center gap-2">
+                  <span>Institutional ID & Account Provisioning Center</span>
+                  <span className="bg-amber-400 text-slate-900 text-[9px] font-bold uppercase px-1.5 py-0.2 rounded">
+                    Admin Exclusive
+                  </span>
+                </div>
+                <div className="text-[11px] text-blue-100/90">
+                  Students and faculty can only log in. Issue Student Roll Numbers, register Faculty IDs, generate class rosters, and manage credentials.
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('id_provisioning')}
+              className="px-3.5 py-1.5 bg-white text-[#162b78] hover:bg-blue-50 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+            >
+              <UserPlus className="w-3.5 h-3.5 text-indigo-700" />
+              <span>Issue New IDs &rarr;</span>
+            </button>
+          </div>
+
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
             <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
               <span className="text-xs text-slate-500 font-medium">Total Students</span>
@@ -238,7 +337,15 @@ export const AdminPortal: React.FC = () => {
                 Programs &rarr; Semesters &rarr; Class Sections &rarr; Subjects & Courses
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAddProgram(true)}
+                className="px-3 py-1.5 bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold rounded-lg flex items-center gap-1 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Program</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setShowAddSection(true)}
@@ -255,6 +362,116 @@ export const AdminPortal: React.FC = () => {
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add Course / Subject</span>
               </button>
+            </div>
+          </div>
+
+          {/* Programs of Study Section */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                    <GraduationCap className="w-4 h-4 text-purple-700" />
+                    Programs of Study Catalog
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 text-[11px] font-bold">
+                    {programs.length} Programs Registered
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Institutional degree programs across Engineering, Computing, AI Specializations, Management, Commerce, Design, Law, Sciences, and Allied Health.
+                </p>
+              </div>
+              <div className="text-xs text-slate-500 flex items-center gap-2">
+                <span>Showing <strong className="text-slate-800">{filteredPrograms.length}</strong> of {programs.length}</span>
+              </div>
+            </div>
+
+            {/* Search & Category Filter Controls */}
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Search program by name (e.g. AI&ML, Fintech, Quantum, Aviation, Psychology)..."
+                  value={progSearch}
+                  onChange={e => setProgSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-purple-500 focus:bg-white"
+                />
+              </div>
+              <div className="shrink-0 flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-slate-400" />
+                <select
+                  value={progCategoryFilter}
+                  onChange={e => setProgCategoryFilter(e.target.value)}
+                  className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-hidden text-slate-700 font-medium"
+                >
+                  <option value="ALL">All Disciplines ({programs.length})</option>
+                  {programCategories.map(cat => (
+                    <option key={cat} value={cat}>
+                      {cat} ({programs.filter(p => (p.category || 'General Programs') === cat).length})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Filtered Programs Table */}
+            <div className="overflow-x-auto max-h-[360px] overflow-y-auto border border-slate-200 rounded-lg shadow-2xs">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 sticky top-0 z-10 shadow-2xs">
+                  <tr>
+                    <th className="py-2.5 px-3">Program Code</th>
+                    <th className="py-2.5 px-3">Program Name / Specialization</th>
+                    <th className="py-2.5 px-3">Duration</th>
+                    <th className="py-2.5 px-3">School / Department</th>
+                    <th className="py-2.5 px-3">Discipline Category</th>
+                    <th className="py-2.5 px-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredPrograms.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-400">
+                        No programs found matching "{progSearch}".
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredPrograms.map(p => (
+                      <tr key={p.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-2 px-3 font-mono font-bold text-indigo-700">
+                          <span className="bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded text-[11px]">
+                            {p.code}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 font-semibold text-slate-900">
+                          {p.name}
+                        </td>
+                        <td className="py-2 px-3 text-slate-600 whitespace-nowrap">
+                          {p.durationYears} Years ({p.durationYears * 2} Semesters)
+                        </td>
+                        <td className="py-2 px-3 text-slate-600 truncate max-w-[200px]" title={p.department}>
+                          {p.department || 'Academic Department'}
+                        </td>
+                        <td className="py-2 px-3 whitespace-nowrap">
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                            {p.category || 'General'}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('id_provisioning')}
+                            className="px-2 py-0.5 text-[10px] font-semibold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 rounded transition-all cursor-pointer"
+                          >
+                            Issue ID
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -435,7 +652,7 @@ export const AdminPortal: React.FC = () => {
                       name: secName,
                       academicYearId: 'ay-2025-26',
                       programId: secProg,
-                      semesterId: secSem,
+                      semesterId: `sem-${(secYear * 2) - 1}`,
                     });
                     setShowAddSection(false);
                     setSecName('');
@@ -443,12 +660,42 @@ export const AdminPortal: React.FC = () => {
                   className="space-y-3 text-xs mt-3"
                 >
                   <div>
-                    <label className="font-medium text-slate-700 block mb-1">Section Name</label>
+                    <label className="font-medium text-slate-700 block mb-1">Program of Study</label>
+                    <select
+                      value={secProg}
+                      onChange={e => setSecProg(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                    >
+                      {programs.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} ({p.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="font-medium text-slate-700 block mb-1">Year of Study</label>
+                    <select
+                      value={secYear}
+                      onChange={e => setSecYear(Number(e.target.value))}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                    >
+                      <option value={1}>1st Year (Semester 1 & 2)</option>
+                      <option value={2}>2nd Year (Semester 3 & 4)</option>
+                      <option value={3}>3rd Year (Semester 5 & 6)</option>
+                      <option value={4}>4th Year (Semester 7 & 8)</option>
+                      <option value={5}>5th Year (Semester 9 & 10)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="font-medium text-slate-700 block mb-1">Section Name / Class Title</label>
                     <input
                       type="text"
                       value={secName}
                       onChange={e => setSecName(e.target.value)}
-                      placeholder="e.g. 3rd Year – A"
+                      placeholder="e.g. 1st Year BBA – Section A"
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                       required
                     />
@@ -467,6 +714,137 @@ export const AdminPortal: React.FC = () => {
                       className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white font-semibold rounded-lg"
                     >
                       Save Section
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Add Program Modal */}
+          {showAddProgram && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+              <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md p-5 animate-scaleUp">
+                <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                  <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                    <GraduationCap className="w-5 h-5 text-purple-700" />
+                    Add Program of Study
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddProgram(false)}
+                    className="text-slate-400 hover:text-slate-600 text-lg font-bold"
+                  >
+                    &times;
+                  </button>
+                </div>
+                <form
+                  onSubmit={e => {
+                    e.preventDefault();
+                    if (!newProgName.trim() || !newProgCode.trim()) return;
+                    addProgram({
+                      name: newProgName.trim(),
+                      code: newProgCode.trim().toUpperCase(),
+                      durationYears: Number(newProgDuration) || 4,
+                      department: newProgDept.trim(),
+                      category: newProgCategory,
+                      degree: newProgName.split(' ')[0] || 'Degree',
+                    });
+                    setShowAddProgram(false);
+                    setNewProgName('');
+                    setNewProgCode('');
+                  }}
+                  className="space-y-3 text-xs"
+                >
+                  <div>
+                    <label className="font-medium text-slate-700 block mb-1">
+                      Program Name / Specialization <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={newProgName}
+                      onChange={e => setNewProgName(e.target.value)}
+                      placeholder="e.g. B.Tech – CSE with specialisation in Quantum Computing"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-purple-500"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-medium text-slate-700 block mb-1">
+                        Program Code <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={newProgCode}
+                        onChange={e => setNewProgCode(e.target.value)}
+                        placeholder="e.g. BTECH-QC"
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg uppercase font-mono"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="font-medium text-slate-700 block mb-1">Duration (Years)</label>
+                      <select
+                        value={newProgDuration}
+                        onChange={e => setNewProgDuration(Number(e.target.value))}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                      >
+                        <option value={1}>1 Year (2 Semesters)</option>
+                        <option value={2}>2 Years (4 Semesters)</option>
+                        <option value={3}>3 Years (6 Semesters)</option>
+                        <option value={4}>4 Years (8 Semesters)</option>
+                        <option value={5}>5 Years (10 Semesters)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="font-medium text-slate-700 block mb-1">Academic Department / School</label>
+                    <input
+                      type="text"
+                      value={newProgDept}
+                      onChange={e => setNewProgDept(e.target.value)}
+                      placeholder="e.g. Department of Quantum Computing"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-medium text-slate-700 block mb-1">Discipline Category</label>
+                    <select
+                      value={newProgCategory}
+                      onChange={e => setNewProgCategory(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                    >
+                      <option value="Computer Science & Emerging AI">Computer Science & Emerging AI</option>
+                      <option value="Engineering & Technology">Engineering & Technology</option>
+                      <option value="Management & Business">Management & Business</option>
+                      <option value="Commerce & Finance">Commerce & Finance</option>
+                      <option value="Design & Arts">Design & Arts</option>
+                      <option value="Law & Legal Studies">Law & Legal Studies</option>
+                      <option value="Humanities & Social Sciences">Humanities & Social Sciences</option>
+                      <option value="Sciences & Mathematics">Sciences & Mathematics</option>
+                      <option value="Paramedical & Health Sciences">Paramedical & Health Sciences</option>
+                      <option value="Aviation Studies">Aviation Studies</option>
+                    </select>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddProgram(false)}
+                      className="px-4 py-2 text-slate-700 hover:bg-slate-100 rounded-lg"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white font-semibold rounded-lg shadow-xs"
+                    >
+                      Save Program
                     </button>
                   </div>
                 </form>
@@ -955,36 +1333,66 @@ export const AdminPortal: React.FC = () => {
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  const headers = ['Roll Number', 'Student Name', 'Section', 'Overall Attendance %', 'At Risk Flag'];
-                  const rows = studentsList.map(st => {
-                    const recs = attendanceRecords.filter(r => r.studentId === st.id);
-                    const stats = calculateAttendanceStats(recs);
-                    const isRisk = stats.percentage < systemSettings.attendanceThresholdPercent ? 'YES' : 'NO';
-                    return [
-                      st.rollNumber,
-                      `"${st.name}"`,
-                      `"${sections.find(s => s.id === st.sectionId)?.name}"`,
-                      stats.percentage,
-                      isRisk,
-                    ].join(',');
-                  });
-                  const csv = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
-                  const encoded = encodeURI(csv);
-                  const a = document.createElement('a');
-                  a.href = encoded;
-                  a.download = 'Institutional_Attendance_Report_2025_2026.csv';
-                  document.body.appendChild(a);
-                  a.click();
-                  document.body.removeChild(a);
-                }}
-                className="flex items-center gap-1.5 px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
-              >
-                <Download className="w-4 h-4" />
-                <span>Export Institution CSV</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const csv = generateStudentsCsv(studentsList, programs, sections, attendanceRecords, systemSettings);
+                    const dateStr = new Date().toISOString().split('T')[0];
+                    triggerCsvDownload(csv, `attendly_enrolled_students_${dateStr}.csv`);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
+                  title="Export all enrolled students as separate CSV"
+                >
+                  <GraduationCap className="w-3.5 h-3.5" />
+                  <span>Save Students CSV ({studentsList.length})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const csv = generateTeachersCsv(facultyList, subjects, sections, facultyAssignments, users);
+                    const dateStr = new Date().toISOString().split('T')[0];
+                    triggerCsvDownload(csv, `attendly_faculty_teachers_${dateStr}.csv`);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
+                  title="Export all appointed faculty as separate CSV"
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>Save Teachers CSV ({facultyList.length})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const headers = ['Roll Number', 'Student Name', 'Section', 'Overall Attendance %', 'At Risk Flag'];
+                    const rows = studentsList.map(st => {
+                      const recs = attendanceRecords.filter(r => r.studentId === st.id);
+                      const stats = calculateAttendanceStats(recs);
+                      const isRisk = stats.percentage < systemSettings.attendanceThresholdPercent ? 'YES' : 'NO';
+                      return [
+                        st.rollNumber,
+                        `"${st.name}"`,
+                        `"${sections.find(s => s.id === st.sectionId)?.name}"`,
+                        stats.percentage,
+                        isRisk,
+                      ].join(',');
+                    });
+                    const csv = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
+                    const encoded = encodeURI(csv);
+                    const a = document.createElement('a');
+                    a.href = encoded;
+                    a.download = 'Institutional_Attendance_Report_2025_2026.csv';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Institution Summary CSV</span>
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto mt-4">
@@ -1087,6 +1495,8 @@ export const AdminPortal: React.FC = () => {
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 };
