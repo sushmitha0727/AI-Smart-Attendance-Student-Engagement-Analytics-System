@@ -84,7 +84,12 @@ export const IdProvisioningManager: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
-    const studentUsers = users.filter(u => u.role === 'student');
+    const studentUsers = users.filter(
+      u =>
+        u.role === 'student' &&
+        !u.id.toLowerCase().startsWith('fac') &&
+        !u.id.toLowerCase().startsWith('admin')
+    );
     studentUsers.forEach(async student => {
       if (!studentPhotoCache[student.id]) {
         try {
@@ -93,7 +98,7 @@ export const IdProvisioningManager: React.FC = () => {
             setStudentPhotoCache(prev => ({ ...prev, [student.id]: photo }));
           }
         } catch (err) {
-          console.error(`Failed to fetch photo for student ${student.id}:`, err);
+          console.warn(`Notice fetching photo for student ${student.id}:`, err);
         }
       }
     });

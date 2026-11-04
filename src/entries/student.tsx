@@ -22,7 +22,7 @@ const StudentAppContent: React.FC = () => {
     }
   }, [isAuthenticated, currentUser, logout]);
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || currentUser.role !== 'student') {
     return (
       <div>
         {roleError && (

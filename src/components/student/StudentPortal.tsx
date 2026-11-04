@@ -104,7 +104,12 @@ export const StudentPortal: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
-    if (currentUser?.id) {
+    if (
+      currentUser?.id &&
+      currentUser.role === 'student' &&
+      !currentUser.id.toLowerCase().startsWith('fac') &&
+      !currentUser.id.toLowerCase().startsWith('admin')
+    ) {
       getStudentPhoto(currentUser.id)
         .then(photo => {
           if (isMounted && photo) {
@@ -112,13 +117,13 @@ export const StudentPortal: React.FC = () => {
           }
         })
         .catch(err => {
-          console.error('Failed to load student photo from Firestore:', err);
+          console.warn('Notice loading student photo from Firestore:', err);
         });
     }
     return () => {
       isMounted = false;
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, currentUser?.role]);
 
   const activePhotoUrl = cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl || currentUser.avatarUrl;
   const hasRegisteredPhoto = Boolean(currentUser.hasRegisteredPhoto || cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl);

@@ -22,7 +22,12 @@ export const Navbar: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
-    if (currentUser?.role === 'student' && currentUser?.id) {
+    if (
+      currentUser?.role === 'student' &&
+      currentUser?.id &&
+      !currentUser.id.toLowerCase().startsWith('fac') &&
+      !currentUser.id.toLowerCase().startsWith('admin')
+    ) {
       getStudentPhoto(currentUser.id)
         .then(photo => {
           if (isMounted && photo) {
@@ -30,7 +35,7 @@ export const Navbar: React.FC = () => {
           }
         })
         .catch(err => {
-          console.error('Failed to load student avatar in Navbar:', err);
+          console.warn('Notice loading student avatar in Navbar:', err);
         });
     } else {
       setStudentPhoto(null);

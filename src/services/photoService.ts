@@ -100,6 +100,23 @@ export async function compressPhoto(file: File | Blob): Promise<string> {
   });
 }
 
+// In-memory cache for loaded student photos during the active session
+const memoryPhotoCache = new Map<string, StudentPhotoData>();
+
+/**
+ * Checks whether an ID belongs to a faculty or admin account, which cannot have student photos.
+ */
+export function isNonStudentId(uid?: string | null): boolean {
+  if (!uid || typeof uid !== 'string') return true;
+  const clean = uid.trim().toLowerCase();
+  return (
+    clean.startsWith('fac') ||
+    clean.startsWith('admin') ||
+    clean.startsWith('user-admin') ||
+    clean.startsWith('user_admin')
+  );
+}
+
 /**
  * Saves a compressed student photo to Firestore at studentPhotos/{uid}
  * and records hasRegisteredPhoto: true and registeredAt in users/{uid}.
@@ -117,9 +134,21 @@ export async function saveStudentPhoto(
     throw new Error('Invalid image data URL provided.');
   }
 
-  try {
-    const updatedAt = new Date().toISOString();
+  // Reject saving student photo for faculty or admin accounts
+  if (isNonStudentId(uid)) {
+    return;
+  }
 
+  const updatedAt = new Date().toISOString();
+
+  // Cache in memory for immediate UI display
+  memoryPhotoCache.set(uid, {
+    dataUrl,
+    updatedAt,
+    consentGiven,
+  });
+
+  try {
     // 1. Write exclusively to studentPhotos/{uid}
     const photoDocRef = doc(db, 'studentPhotos', uid);
     await setDoc(photoDocRef, {
@@ -148,18 +177,42 @@ export async function saveStudentPhoto(
  * Returns the dataUrl string or null if not found.
  */
 export async function getStudentPhoto(uid: string): Promise<string | null> {
-  if (!uid) return null;
+  if (!uid || typeof uid !== 'string') return null;
+
+  // Faculty and Admin accounts do not have student face photos
+  if (isNonStudentId(uid)) {
+    return null;
+  }
+
+  // Check in-memory session cache first
+  if (memoryPhotoCache.has(uid)) {
+    return memoryPhotoCache.get(uid)?.dataUrl || null;
+  }
 
   try {
     const photoDocRef = doc(db, 'studentPhotos', uid);
     const snap = await getDoc(photoDocRef);
     if (snap.exists()) {
       const data = snap.data();
-      return (data?.dataUrl as string) || null;
+      const url = (data?.dataUrl as string) || null;
+      if (url) {
+        memoryPhotoCache.set(uid, {
+          dataUrl: url,
+          updatedAt: data?.updatedAt || new Date().toISOString(),
+          consentGiven: Boolean(data?.consentGiven),
+        });
+      }
+      return url;
     }
     return null;
-  } catch (error) {
-    console.error(`Failed to fetch student photo from Firestore for student ${uid}:`, error);
+  } catch (error: any) {
+    const msg = error?.message || String(error);
+    if (msg.includes('insufficient permissions') || msg.includes('permission-denied') || msg.includes('PERMISSION_DENIED')) {
+      console.warn(`[photoService] Notice: studentPhotos collection access restricted for ${uid}:`, msg);
+    } else {
+      console.warn(`[photoService] Notice: Could not fetch student photo for student ${uid}:`, error);
+    }
     return null;
   }
 }
+

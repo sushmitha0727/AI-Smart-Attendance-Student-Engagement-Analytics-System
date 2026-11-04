@@ -52,4 +52,26 @@ describe('photoService unit tests', () => {
     const result = await getStudentPhoto('');
     assert.equal(result, null);
   });
+
+  it('getStudentPhoto returns null immediately for faculty accounts like fac302', async () => {
+    const resultFaculty1 = await getStudentPhoto('fac302');
+    const resultFaculty2 = await getStudentPhoto('fac-ramesh');
+    const resultFaculty3 = await getStudentPhoto('FAC_JOHN');
+    assert.equal(resultFaculty1, null);
+    assert.equal(resultFaculty2, null);
+    assert.equal(resultFaculty3, null);
+  });
+
+  it('getStudentPhoto returns null immediately for admin accounts', async () => {
+    const resultAdmin1 = await getStudentPhoto('user-admin');
+    const resultAdmin2 = await getStudentPhoto('admin');
+    assert.equal(resultAdmin1, null);
+    assert.equal(resultAdmin2, null);
+  });
+
+  it('saveStudentPhoto safely ignores faculty or admin accounts without error', async () => {
+    // Should not throw or write to studentPhotos
+    await saveStudentPhoto('fac302', 'data:image/jpeg;base64,123');
+    await saveStudentPhoto('admin', 'data:image/jpeg;base64,123');
+  });
 });
