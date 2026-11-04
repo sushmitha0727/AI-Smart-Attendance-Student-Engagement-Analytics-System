@@ -116,6 +116,14 @@ const AdminAppContent: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          <a
+            href="/"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+            title="Return to Institutional Gateway"
+          >
+            <span>← Gateway</span>
+          </a>
+
           <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-slate-900 border border-slate-800 rounded-lg text-xs">
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
             <span className="text-slate-300">{currentUser.name}</span>

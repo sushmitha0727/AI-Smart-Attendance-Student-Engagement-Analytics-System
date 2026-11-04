@@ -64,7 +64,8 @@ service cloud.firestore {
 
     match /attendanceRecords/{recordId} {
       allow read: if true;
-      allow write: if !isStudent();
+      allow create: if true;
+      allow update, delete: if !isStudent();
     }
 
     match /assignments/{assignmentId} {

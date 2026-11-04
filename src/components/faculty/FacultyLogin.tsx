@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { Users, KeyRound, Eye, EyeOff, HelpCircle, GraduationCap } from 'lucide-react';
+import { Users, Eye, EyeOff, HelpCircle, Sparkles } from 'lucide-react';
 
 export const FacultyLogin: React.FC = () => {
   const { login } = useApp();
@@ -11,6 +11,23 @@ export const FacultyLogin: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+
+  const handleQuickFill = () => {
+    setIdentifier('ramesh.kumar@univ.edu');
+    setPassword('password123');
+    setError(null);
+  };
+
+  const handleInstantDemoFaculty = () => {
+    setIsLoading(true);
+    setTimeout(() => {
+      const res = login('ramesh.kumar@univ.edu', 'password123', true, 'faculty');
+      setIsLoading(false);
+      if (!res.success) {
+        setError(res.message || 'Could not sign into demo faculty account.');
+      }
+    }, 200);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,6 +67,12 @@ export const FacultyLogin: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <a
+            href="/"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+          >
+            <span>← Gateway</span>
+          </a>
           <button
             type="button"
             onClick={() => setShowHelpModal(true)}
@@ -75,6 +98,32 @@ export const FacultyLogin: React.FC = () => {
               <p className="text-xs sm:text-sm text-slate-500">
                 Enter your Employee ID, institutional email, or username
               </p>
+            </div>
+
+            {/* Quick Demo Fill Pill */}
+            <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 flex items-center justify-between text-xs">
+              <div>
+                <span className="text-blue-900 font-semibold block">Demo Account</span>
+                <span className="text-slate-500 text-[11px]">Dr. Ramesh Kumar (FAC301)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleQuickFill}
+                  className="px-2.5 py-1 bg-white hover:bg-blue-100 text-blue-700 border border-blue-300 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Fill Form
+                </button>
+                <button
+                  type="button"
+                  onClick={handleInstantDemoFaculty}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                  title="Instant access without typing"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>Instant</span>
+                </button>
+              </div>
             </div>
 
             {error && (

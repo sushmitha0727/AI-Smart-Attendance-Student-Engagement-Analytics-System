@@ -59,6 +59,14 @@ const StudentAppContent: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          <a
+            href="/"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+            title="Return to Institutional Gateway"
+          >
+            <span>← Gateway</span>
+          </a>
+
           <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs">
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
             <span className="text-slate-700 font-medium">{currentUser.name}</span>
