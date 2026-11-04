@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { getStudentPhoto } from '../../services/photoService';
 import {
   GraduationCap,
   Users,
@@ -10,12 +11,34 @@ import {
   Sparkles,
   Info,
   LogOut,
+  Bell,
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
-  const { currentUser, setCurrentUser, availableUsers, resetToDefaults, logout } = useApp();
+  const { currentUser, setCurrentUser, availableUsers, resetToDefaults, logout, notices } = useApp();
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [showDemoInfo, setShowDemoInfo] = useState(false);
+  const [studentPhoto, setStudentPhoto] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (currentUser?.role === 'student' && currentUser?.id) {
+      getStudentPhoto(currentUser.id)
+        .then(photo => {
+          if (isMounted && photo) {
+            setStudentPhoto(photo);
+          }
+        })
+        .catch(err => {
+          console.error('Failed to load student avatar in Navbar:', err);
+        });
+    } else {
+      setStudentPhoto(null);
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUser?.id, currentUser?.role]);
 
   const getRoleBadge = (role: string) => {
     switch (role) {
@@ -29,6 +52,15 @@ export const Navbar: React.FC = () => {
         return 'bg-slate-100 text-slate-800 border-slate-200';
     }
   };
+
+  const studentAlertCount = currentUser.role === 'student'
+    ? notices.filter(
+        n => (!n.targetSectionId || n.targetSectionId === currentUser.sectionId) &&
+             (!n.targetStudentId || n.targetStudentId === currentUser.id) &&
+             !n.isDismissed &&
+             (n.type === 'participation_alert' || n.type === 'attendance_warning')
+      ).length
+    : 0;
 
   return (
     <>
@@ -56,6 +88,17 @@ export const Navbar: React.FC = () => {
 
           {/* Right Action Bar */}
           <div className="flex items-center gap-3">
+            {/* Student Alert Notification Pill */}
+            {studentAlertCount > 0 && (
+              <div
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-rose-700 bg-rose-50 border border-rose-300 rounded-lg animate-pulse"
+                title="Critical participation or attendance alert active"
+              >
+                <Bell className="w-3.5 h-3.5 text-rose-600" />
+                <span>{studentAlertCount} Alert{studentAlertCount > 1 ? 's' : ''}</span>
+              </div>
+            )}
+
             {/* Demo Mode Pill */}
             <button
               type="button"
@@ -90,7 +133,7 @@ export const Navbar: React.FC = () => {
               className="flex items-center gap-2.5 pl-2 pr-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer group"
             >
               <img
-                src={currentUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80'}
+                src={(currentUser.role === 'student' && studentPhoto) || currentUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80'}
                 alt={currentUser.name}
                 className="w-7 h-7 rounded-full object-cover ring-1 ring-slate-300"
               />

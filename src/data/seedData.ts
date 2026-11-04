@@ -1090,6 +1090,42 @@ export const SEED_NOTICES: Notice[] = [
     targetSectionId: 'sec-7-aiml-d',
     createdAt: '2026-10-31',
   },
+  {
+    id: 'not-part-priya-java',
+    title: '⚠️ Critical Participation Alert: Score at 48.2% (Below 60% Threshold)',
+    content: 'Your provisional participation score in Java Programming has fallen to 2.41 / 5.0 (48.2%), which is below the institutional 60.0% engagement minimum. Take proactive steps to submit missing labs and quizzes to recover your academic standing.',
+    type: 'participation_alert',
+    authorId: 'system-engagement',
+    authorName: 'Academic Engagement System',
+    authorRole: 'system',
+    targetSubjectId: 'sub-java',
+    targetSectionId: 'sec-2a',
+    targetStudentId: 'stud-priya',
+    urgency: 'critical',
+    currentScore: 2.41,
+    thresholdPercent: 60,
+    actionRecommendations: [
+      {
+        title: 'Submit LRU Cache Coding Test',
+        description: 'Automated test suite gives up to 1.50 marks towards your participation rubric score.',
+        potentialGain: '+1.50 pts',
+        actionTab: 'coding_tests',
+      },
+      {
+        title: 'Complete Java Garbage Collection Quiz',
+        description: 'Attempt scheduled 10-minute quiz to raise quiz component to full marks.',
+        potentialGain: '+0.34 pts',
+        actionTab: 'quizzes',
+      },
+      {
+        title: 'Submit Multithreading Assignment',
+        description: 'Coursework submission will boost your assignment component from 0.70 to 1.00.',
+        potentialGain: '+0.30 pts',
+        actionTab: 'assignments',
+      },
+    ],
+    createdAt: '2026-10-31',
+  },
 ];
 
 export const SEED_COURSE_MATERIALS: CourseMaterial[] = [
@@ -1225,4 +1261,5 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
     discussionWeight: 1.0,
     consistencyWeight: 0.5,
   },
+  lowParticipationThresholdPercent: 60,
 };

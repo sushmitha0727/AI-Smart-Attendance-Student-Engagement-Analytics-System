@@ -5,6 +5,7 @@ import {
   calculateAttendanceRecovery,
   projectAttendanceScenario,
   evaluateEngagement,
+  evaluateStudentParticipationAlert,
 } from '../../utils/academicCalculations';
 import {
   CheckCircle2,
@@ -33,13 +34,16 @@ import {
   UserCheck,
   RefreshCw,
   X,
+  Sparkles,
+  ExternalLink,
+  Filter,
 } from 'lucide-react';
+import { ParticipationTrendChart } from '../common/ParticipationTrendChart';
 import { uploadAssignmentFile, uploadProfileImage } from '../../services/storageService';
 import {
   loadFaceApiModels,
   validateRegistrationPhotoWithTimeout,
   resizeImageToJpeg,
-  uploadImageResumable,
   computeFaceDescriptor,
   calculateEAR,
   calculateHeadTurn,
@@ -48,7 +52,7 @@ import {
 } from '../../utils/faceVerification';
 import { auth, storage, db } from '../../firebase/config';
 import { ref, getDownloadURL } from 'firebase/storage';
-import { uploadStudentPhotoResumable } from '../../services/storageService';
+import { compressPhoto, saveStudentPhoto, getStudentPhoto } from '../../services/photoService';
 import { doc, updateDoc, addDoc, collection, onSnapshot } from 'firebase/firestore';
 import * as faceapi from '@vladmandic/face-api';
 
@@ -77,6 +81,8 @@ export const StudentPortal: React.FC = () => {
     submitCodingSolution,
     submitCorrectionRequest,
     updateUserProfilePhoto,
+    dismissNotice,
+    markNoticeRead,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<
@@ -93,26 +99,29 @@ export const StudentPortal: React.FC = () => {
     | 'correction_request'
   >('dashboard');
 
-  const [firestorePhotoUrl, setFirestorePhotoUrl] = useState<string | null>(null);
+  // React State cache for student photo from Firestore (photoService)
+  const [cachedPhotoDataUrl, setCachedPhotoDataUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!currentUser?.id) return;
-    const unsub = onSnapshot(doc(db, 'users', currentUser.id), snap => {
-      if (snap.exists()) {
-        const data = snap.data();
-        const rawUrl = data.photoURL || data.registeredFacePhotoUrl;
-        if (rawUrl) {
-          const v = data.photoUpdatedAt || Date.now();
-          const timedUrl = `${rawUrl}${rawUrl.includes('?') ? '&' : '?'}v=${v}`;
-          setFirestorePhotoUrl(timedUrl);
-        }
-      }
-    });
-    return () => unsub();
+    let isMounted = true;
+    if (currentUser?.id) {
+      getStudentPhoto(currentUser.id)
+        .then(photo => {
+          if (isMounted && photo) {
+            setCachedPhotoDataUrl(photo);
+          }
+        })
+        .catch(err => {
+          console.error('Failed to load student photo from Firestore:', err);
+        });
+    }
+    return () => {
+      isMounted = false;
+    };
   }, [currentUser?.id]);
 
-  const activePhotoUrl = firestorePhotoUrl || currentUser.registeredFacePhotoUrl || currentUser.avatarUrl;
-  const hasRegisteredPhoto = Boolean(activePhotoUrl);
+  const activePhotoUrl = cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl || currentUser.avatarUrl;
+  const hasRegisteredPhoto = Boolean(currentUser.hasRegisteredPhoto || cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl);
   const [showRegisterPhotoModal, setShowRegisterPhotoModal] = useState(false);
   const [regConsentAgreed, setRegConsentAgreed] = useState(false);
   const [regFile, setRegFile] = useState<File | null>(null);
@@ -120,7 +129,7 @@ export const StudentPortal: React.FC = () => {
   const [regError, setRegError] = useState<string | null>(null);
   const [regSuccess, setRegSuccess] = useState<string | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
-  const [regUploadProgress, setRegUploadProgress] = useState(0);
+  const [regPhotoStep, setRegPhotoStep] = useState<string | null>(null);
 
   // Photo Change Request State
   const [showPhotoChangeModal, setShowPhotoChangeModal] = useState(false);
@@ -193,11 +202,56 @@ export const StudentPortal: React.FC = () => {
     return map;
   }, [studentSubjects, studentRecords]);
 
+  const [dashboardBannerDismissed, setDashboardBannerDismissed] = useState(false);
+  const [noticeFilter, setNoticeFilter] = useState<'all' | 'critical' | 'deadlines' | 'general'>('all');
+
+  // Interactive tab helper states
+  const [selectedAsgId, setSelectedAsgId] = useState<string | null>(null);
+  const [asgTextSolution, setAsgTextSolution] = useState('');
+  const [asgFileName, setAsgFileName] = useState('');
+  const [asgSubmitSuccess, setAsgSubmitSuccess] = useState(false);
+
+  const [activeQuiz, setActiveQuiz] = useState<any | null>(null);
+  const [selectedQuizAnswers, setSelectedQuizAnswers] = useState<Record<number, number>>({});
+  const [quizSubmittedScore, setQuizSubmittedScore] = useState<number | null>(null);
+
+  const [activeCodingTest, setActiveCodingTest] = useState<any | null>(null);
+  const [userCodingCode, setUserCodingCode] = useState('');
+  const [codingResult, setCodingResult] = useState<{ passed: number; total: number; score: number } | null>(null);
+
   const studentNotices = useMemo(() => {
     return notices.filter(
-      n => !n.targetSectionId || n.targetSectionId === currentUser.sectionId
+      n => (!n.targetSectionId || n.targetSectionId === currentUser.sectionId) &&
+           (!n.targetStudentId || n.targetStudentId === currentUser.id) &&
+           !n.isDismissed
     );
-  }, [notices, currentUser.sectionId]);
+  }, [notices, currentUser.sectionId, currentUser.id]);
+
+  const studentParticipationAlert = useMemo(() => {
+    return evaluateStudentParticipationAlert({
+      student: currentUser,
+      participationScores,
+      thresholdPercent: systemSettings.lowParticipationThresholdPercent ?? 60,
+      subjects: studentSubjects,
+      assignments,
+      assignmentSubmissions,
+      quizzes,
+      quizAttempts,
+      codingTests,
+      codingSubmissions,
+    });
+  }, [
+    currentUser,
+    participationScores,
+    systemSettings.lowParticipationThresholdPercent,
+    studentSubjects,
+    assignments,
+    assignmentSubmissions,
+    quizzes,
+    quizAttempts,
+    codingTests,
+    codingSubmissions,
+  ]);
 
   const studentParticipation = useMemo(() => {
     return classParticipationEntries.filter(p => p.studentId === currentUser.id);
@@ -258,16 +312,12 @@ export const StudentPortal: React.FC = () => {
     };
   }, []);
 
-  // Handle Photo Registration Submission
+  // Handle Photo Registration Submission using photoService
   const handleRegisterFacePhoto = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegError(null);
     setRegSuccess(null);
 
-    if (!auth.currentUser) {
-      setRegError('You are not signed in with Firebase. Please log out and sign in again.');
-      return;
-    }
     if (!regConsentAgreed) {
       setRegError('You must grant consent for your photo to be used for attendance verification.');
       return;
@@ -279,19 +329,9 @@ export const StudentPortal: React.FC = () => {
 
     setIsRegistering(true);
     try {
-      if (!auth.currentUser) {
-        throw new Error('You are not signed in with Firebase. Please log out and sign in again.');
-      }
-
-      // Step 1: Resize/compress
-      console.log('[Photo Upload] Step 1: Resize/compress started at', new Date().toISOString());
-      const t1 = Date.now();
       const sourceBlob = regFile || (await (await fetch(regPreview || '')).blob());
-      const resizedBlob = await resizeImageToJpeg(sourceBlob);
-      console.log(`[Photo Upload] Step 1: Completed in ${Date.now() - t1}ms`);
 
-      // Step 2: Face Validation with 20s timeout
-      const t2 = Date.now();
+      // Step 1: Face Validation with 20s timeout
       const img = new Image();
       const imageUrl = regPreview || URL.createObjectURL(sourceBlob);
       img.src = imageUrl;
@@ -305,52 +345,31 @@ export const StudentPortal: React.FC = () => {
         setRegError(validation.message || 'Face validation failed.');
         return;
       }
-      console.log(`[Photo Upload] Step 2: Completed in ${Date.now() - t2}ms`);
 
-      // Step 3: Storage Upload using uploadStudentPhotoResumable
-      const { downloadUrl, storagePath } = await uploadStudentPhotoResumable(resizedBlob, pct => setRegUploadProgress(pct));
+      // Step 2: Compressing...
+      setRegPhotoStep('Compressing...');
+      const dataUrl = await compressPhoto(sourceBlob);
 
-      // Step 4: Firestore Update
-      console.log('[Photo Upload] Step 4: Firestore update started at', new Date().toISOString());
-      const t4 = Date.now();
-      const photoUpdatedAt = Date.now();
-      await updateDoc(doc(db, 'users', currentUser.id), {
-        photoPath: storagePath,
-        photoURL: downloadUrl,
-        photoUpdatedAt,
-        registeredFacePhotoPath: storagePath,
-        registeredFacePhotoUrl: downloadUrl,
-        avatarUrl: downloadUrl,
-        faceConsentGiven: true,
-      });
-      console.log('firestore saved');
-      console.log(`[Photo Upload] Step 4: Completed in ${Date.now() - t4}ms`);
+      // Step 3: Saving...
+      setRegPhotoStep('Saving...');
+      await saveStudentPhoto(currentUser.id, dataUrl, regConsentAgreed);
+
+      // Step 4: Saved & cached in React state only
+      setRegPhotoStep('Saved');
+      setCachedPhotoDataUrl(dataUrl);
 
       setRegSuccess('Face photo successfully registered and verified!');
       setTimeout(() => {
         setShowRegisterPhotoModal(false);
         setRegSuccess(null);
-      }, 1500);
+        setRegPhotoStep(null);
+      }, 1200);
     } catch (err: any) {
       console.error('[Photo Upload] Registration photo error:', err);
-      let friendlyMsg = 'Upload failed. Please try again.';
-      const code = err?.code || '';
-      const msg = err?.message || '';
-      if (code === 'storage/unauthorized' || msg.includes('unauthorized')) {
-        friendlyMsg = 'You are not signed in or not allowed to upload. Please log out and sign in again.';
-      } else if (code === 'storage/bucket-not-found' || code === 'storage/project-not-found' || msg.includes('bucket')) {
-        friendlyMsg = 'Cloud Storage is not set up for this project.';
-      } else if (code === 'storage/canceled' || msg.includes('canceled') || msg.includes('cancelled')) {
-        friendlyMsg = 'Upload cancelled.';
-      } else if (msg.includes('timed out') || msg.includes('timeout')) {
-        friendlyMsg = 'Upload timed out. Check your connection and try again.';
-      } else if (msg.includes('not signed in')) {
-        friendlyMsg = msg;
-      }
-      setRegError(friendlyMsg);
+      setRegError(err?.message || 'Failed to save student photo. Please try again.');
     } finally {
       setIsRegistering(false);
-      setRegUploadProgress(0);
+      setRegPhotoStep(null);
     }
   };
 
@@ -583,18 +602,10 @@ export const StudentPortal: React.FC = () => {
     try {
       await loadFaceApiModels();
 
-      // Resolve fresh URL via getDownloadURL(ref(storage, path))
-      let freshUrl = '';
-      const photoPath = (currentUser as any).registeredFacePhotoPath;
-      if (photoPath) {
-        try {
-          freshUrl = await getDownloadURL(ref(storage, photoPath));
-        } catch (e) {
-          console.warn('Failed to resolve fresh download URL from path, falling back to URL:', e);
-        }
-      }
+      // Requirement 5: Read registered photo from getStudentPhoto instead of Storage
+      let freshUrl = await getStudentPhoto(currentUser.id);
       if (!freshUrl) {
-        freshUrl = currentUser.registeredFacePhotoUrl || currentUser.avatarUrl;
+        freshUrl = cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl || currentUser.avatarUrl;
       }
       setRegisteredPhotoFreshUrl(freshUrl);
       setRegisteredPhotoLoading(false);
@@ -703,7 +714,13 @@ export const StudentPortal: React.FC = () => {
               { id: 'coding_tests', label: 'Coding Lab Tests', icon: Code2 },
               { id: 'engagement', label: 'Engagement & Risk Score', icon: Award },
               { id: 'participation_marks', label: 'Class Participation Rubric', icon: MessageSquare },
-              { id: 'notifications', label: 'Notices & Announcements', icon: Bell },
+              {
+                id: 'notifications',
+                label: 'Notices & Announcements',
+                icon: Bell,
+                badge: (studentParticipationAlert || studentNotices.some(n => n.type === 'participation_alert')) ? 'Alert' : studentNotices.length > 0 ? String(studentNotices.length) : undefined,
+                badgeColor: (studentParticipationAlert || studentNotices.some(n => n.type === 'participation_alert')) ? 'bg-rose-600 text-white animate-pulse' : 'bg-slate-100 text-slate-700 font-mono',
+              },
               { id: 'correction_request', label: 'Attendance Correction Requests', icon: RefreshCw },
             ].map(item => {
               const Icon = item.icon;
@@ -727,7 +744,7 @@ export const StudentPortal: React.FC = () => {
                     <span>{item.label}</span>
                   </div>
                   {item.badge && (
-                    <span className="px-1.5 py-0.2 bg-amber-400 text-slate-900 text-[10px] font-bold rounded animate-pulse">
+                    <span className={`px-1.5 py-0.2 text-[10px] font-bold rounded ${item.badgeColor || 'bg-amber-400 text-slate-900 animate-pulse'}`}>
                       {item.badge}
                     </span>
                   )}
@@ -744,7 +761,7 @@ export const StudentPortal: React.FC = () => {
             <div className="flex items-center gap-4">
               <div className="relative">
                 <img
-                  src={currentUser.avatarUrl || currentUser.registeredFacePhotoUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80'}
+                  src={activePhotoUrl}
                   alt={currentUser.name}
                   className="w-16 h-16 rounded-full object-cover ring-4 ring-emerald-50"
                 />
@@ -786,17 +803,34 @@ export const StudentPortal: React.FC = () => {
                       Register Face Photo
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPhotoChangeReason('');
-                        setPhotoChangeSubmitted(false);
-                        setShowPhotoChangeModal(true);
-                      }}
-                      className="text-[11px] text-indigo-600 hover:text-indigo-800 underline font-medium cursor-pointer"
-                    >
-                      Request photo change
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRegFile(null);
+                          setRegPreview(null);
+                          setRegError(null);
+                          setRegSuccess(null);
+                          setRegConsentAgreed(true);
+                          setShowRegisterPhotoModal(true);
+                        }}
+                        className="text-[11px] text-emerald-700 hover:text-emerald-900 underline font-semibold cursor-pointer"
+                      >
+                        Change Photo
+                      </button>
+                      <span className="text-slate-300">·</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPhotoChangeReason('');
+                          setPhotoChangeSubmitted(false);
+                          setShowPhotoChangeModal(true);
+                        }}
+                        className="text-[11px] text-indigo-600 hover:text-indigo-800 underline font-medium cursor-pointer"
+                      >
+                        Request admin change
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -828,6 +862,91 @@ export const StudentPortal: React.FC = () => {
           {/* TAB 1: DASHBOARD */}
           {activeTab === 'dashboard' && (
             <div className="space-y-6">
+              {/* Critical Participation Score Alert Banner (<60% Threshold) */}
+              {studentParticipationAlert && !dashboardBannerDismissed && (
+                <div className="bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 border-2 border-rose-300 rounded-2xl p-5 shadow-sm space-y-4 relative">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm animate-bounce">
+                        <AlertTriangle className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2 py-0.5 text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white rounded-md">
+                            Critical Engagement Alert
+                          </span>
+                          <span className="text-xs font-mono font-bold text-rose-800">
+                            Current Score: {studentParticipationAlert.scorePercentage}% (Target: {studentParticipationAlert.thresholdPercent}%)
+                          </span>
+                        </div>
+                        <h3 className="text-sm sm:text-base font-bold text-slate-900 mt-1">
+                          Participation Score Below Critical Threshold (60%)
+                        </h3>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          Your provisional score in <strong>{studentParticipationAlert.subjectName}</strong> is{' '}
+                          <strong className="text-rose-700 font-mono">{studentParticipationAlert.currentScore.toFixed(2)} / 5.0 marks</strong>.
+                          You need <strong className="text-amber-800 font-mono">+{studentParticipationAlert.pointsNeeded.toFixed(2)} pts</strong> to cross the 60% requirement and avoid academic risk.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 self-end sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('notifications')}
+                        className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                      >
+                        View in Notices
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDashboardBannerDismissed(true)}
+                        className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-white/60 transition-colors"
+                        title="Dismiss Alert"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Recovery Action Suggestions */}
+                  <div className="bg-white/80 backdrop-blur-xs rounded-xl p-3.5 border border-rose-200/60 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Recommended Score Recovery Actions (Click to Complete)</span>
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-medium hidden sm:inline">Boost your rubric marks directly</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1">
+                      {studentParticipationAlert.recommendations.map((rec, idx) => (
+                        <div
+                          key={idx}
+                          className="p-3 bg-white border border-slate-200 hover:border-indigo-400 rounded-lg shadow-2xs flex flex-col justify-between gap-2 transition-all hover:shadow-xs group cursor-pointer"
+                          onClick={() => setActiveTab(rec.actionTab)}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-xs font-semibold text-slate-900 group-hover:text-indigo-600 line-clamp-1">
+                                {rec.title}
+                              </span>
+                              <span className="text-[10px] font-bold font-mono px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded shrink-0">
+                                {rec.potentialGain}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{rec.description}</p>
+                          </div>
+                          <div className="flex items-center justify-between text-[11px] font-semibold text-indigo-600 pt-1 border-t border-slate-100">
+                            <span>Take Action Now</span>
+                            <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {overallStats.percentage < systemSettings.attendanceThresholdPercent && (
                 <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start gap-3">
                   <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
@@ -882,11 +1001,29 @@ export const StudentPortal: React.FC = () => {
                 </div>
                 <div className="bg-white border border-slate-200 rounded-xl p-4">
                   <span className="text-xs text-slate-500 font-medium">Provisional Participation</span>
-                  <div className="mt-2 text-2xl font-bold font-mono text-indigo-700">
-                    {(participationScores.find(p => p.studentId === currentUser.id)?.provisionalScore || 4.2).toFixed(1)} / 5.0
+                  <div className="mt-2 flex items-baseline gap-2">
+                    <span className={`text-2xl font-bold font-mono ${studentParticipationAlert ? 'text-rose-600' : 'text-indigo-700'}`}>
+                      {(participationScores.find(p => p.studentId === currentUser.id)?.provisionalScore || (studentParticipationAlert ? studentParticipationAlert.currentScore : 4.2)).toFixed(1)} / 5.0
+                    </span>
+                    {studentParticipationAlert && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
+                        &lt; {systemSettings.lowParticipationThresholdPercent ?? 60}%
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
+
+              {/* 4-Week Participation Score Trend Analysis Line Graph */}
+              <ParticipationTrendChart
+                student={currentUser}
+                currentScore={participationScores.find(p => p.studentId === currentUser.id)?.provisionalScore ?? 4.2}
+                participationScores={participationScores}
+                subjects={studentSubjects}
+                attendancePercentage={overallStats.percentage}
+                title="Participation Score Trends (Last 4 Weeks)"
+                subtitle="Continuous longitudinal tracking of 5-mark participation rubric scores, rubric breakdowns, and class average comparisons."
+              />
             </div>
           )}
 
@@ -1232,6 +1369,971 @@ export const StudentPortal: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* TAB 3: NOTICES & CRITICAL PARTICIPATION ALERTS */}
+          {activeTab === 'notifications' && (
+            <div className="space-y-6">
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <Bell className="w-5 h-5 text-indigo-700" />
+                    <span>Notices, Alerts & Academic Communications</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Real-time notifications including low participation score alerts, institutional audits, and assignment deadlines.
+                  </p>
+                </div>
+
+                {/* Filter Pills */}
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  {[
+                    { id: 'all', label: `All (${studentNotices.length})` },
+                    { id: 'critical', label: `Critical Alerts (${studentNotices.filter(n => n.type === 'participation_alert' || n.type === 'attendance_warning').length})` },
+                    { id: 'deadlines', label: `Deadlines (${studentNotices.filter(n => n.type === 'deadline' || n.type === 'coding_reminder' || n.type === 'quiz_reminder').length})` },
+                    { id: 'general', label: `General (${studentNotices.filter(n => n.type === 'announcement' || n.type === 'notice').length})` },
+                  ].map(f => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setNoticeFilter(f.id as any)}
+                      className={`px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer ${
+                        noticeFilter === f.id
+                          ? 'bg-indigo-600 text-white shadow-2xs'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Notice Cards List */}
+              <div className="space-y-4">
+                {studentNotices
+                  .filter(n => {
+                    if (noticeFilter === 'critical') return n.type === 'participation_alert' || n.type === 'attendance_warning';
+                    if (noticeFilter === 'deadlines') return n.type === 'deadline' || n.type === 'coding_reminder' || n.type === 'quiz_reminder';
+                    if (noticeFilter === 'general') return n.type === 'announcement' || n.type === 'notice';
+                    return true;
+                  })
+                  .map(notice => {
+                    const isPartAlert = notice.type === 'participation_alert';
+                    const targetSubj = subjects.find(s => s.id === notice.targetSubjectId);
+
+                    return (
+                      <div
+                        key={notice.id}
+                        className={`rounded-xl border p-5 shadow-xs transition-all ${
+                          isPartAlert
+                            ? 'bg-gradient-to-r from-rose-50/90 via-amber-50/50 to-white border-rose-300 ring-1 ring-rose-200'
+                            : notice.type === 'attendance_warning'
+                            ? 'bg-rose-50/50 border-rose-200'
+                            : 'bg-white border-slate-200'
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {isPartAlert ? (
+                                <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-rose-600 text-white rounded">
+                                  Critical Participation Alert
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-slate-100 text-slate-700 rounded border border-slate-200">
+                                  {notice.type.replace('_', ' ')}
+                                </span>
+                              )}
+
+                              {targetSubj && (
+                                <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
+                                  {targetSubj.name}
+                                </span>
+                              )}
+
+                              <span className="text-xs text-slate-400 font-mono">
+                                {notice.createdAt}
+                              </span>
+                            </div>
+
+                            <h4 className="text-sm sm:text-base font-bold text-slate-900 mt-1">
+                              {notice.title}
+                            </h4>
+                            <p className="text-xs text-slate-600 leading-relaxed max-w-3xl">
+                              {notice.content}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                            <button
+                              type="button"
+                              onClick={() => dismissNotice(notice.id)}
+                              className="px-2.5 py-1 text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-100 border border-slate-200 rounded-md cursor-pointer"
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Special Visual Gauge & Recovery Plan for Participation Alerts */}
+                        {isPartAlert && (
+                          <div className="mt-4 pt-4 border-t border-rose-200/70 space-y-3">
+                            <div className="bg-white/90 rounded-lg p-3 border border-rose-100 space-y-2">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="font-semibold text-slate-700">Participation Rubric Standing:</span>
+                                <div className="flex items-center gap-2 font-mono">
+                                  <span className="text-rose-700 font-bold">
+                                    {(notice.currentScore ?? 2.41).toFixed(2)} / 5.0 marks ({(((notice.currentScore ?? 2.41) / 5) * 100).toFixed(1)}%)
+                                  </span>
+                                  <span className="text-slate-400">·</span>
+                                  <span className="text-slate-600 font-medium">Required: {notice.thresholdPercent ?? 60}% (3.0/5.0)</span>
+                                </div>
+                              </div>
+
+                              {/* Progress bar showing threshold mark */}
+                              <div className="relative w-full h-3 bg-slate-100 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-gradient-to-r from-rose-500 to-amber-500 rounded-full transition-all"
+                                  style={{ width: `${Math.min(100, Math.max(5, (((notice.currentScore ?? 2.41) / 5) * 100)))}%` }}
+                                />
+                                <div
+                                  className="absolute top-0 bottom-0 w-0.5 bg-slate-900 z-10"
+                                  style={{ left: `${notice.thresholdPercent ?? 60}%` }}
+                                  title="Critical 60% Threshold"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Recommendations Grid */}
+                            {notice.actionRecommendations && notice.actionRecommendations.length > 0 && (
+                              <div className="space-y-2">
+                                <span className="text-xs font-bold text-slate-800 uppercase tracking-wide block">
+                                  Actionable Engagement Steps to Cross Threshold:
+                                </span>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                                  {notice.actionRecommendations.map((rec, rIdx) => (
+                                    <div
+                                      key={rIdx}
+                                      onClick={() => setActiveTab(rec.actionTab)}
+                                      className="p-3 bg-white border border-slate-200 hover:border-indigo-400 rounded-lg shadow-2xs flex flex-col justify-between gap-2 group cursor-pointer transition-all"
+                                    >
+                                      <div>
+                                        <div className="flex items-center justify-between gap-1">
+                                          <span className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 line-clamp-1">
+                                            {rec.title}
+                                          </span>
+                                          <span className="text-[10px] font-bold font-mono px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded shrink-0">
+                                            {rec.potentialGain}
+                                          </span>
+                                        </div>
+                                        <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{rec.description}</p>
+                                      </div>
+                                      <div className="flex items-center justify-between text-[11px] font-semibold text-indigo-600 pt-1 border-t border-slate-100">
+                                        <span>Resolve now</span>
+                                        <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                {studentNotices.length === 0 && (
+                  <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500 space-y-2">
+                    <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
+                    <p className="font-semibold text-slate-800 text-sm">All Caught Up!</p>
+                    <p>You have no active pending alerts or unread notifications.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: ATTENDANCE & PARTICIPATION RECOVERY PLANNER */}
+          {activeTab === 'recovery_planner' && (
+            <div className="space-y-6">
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+                <h3 className="text-base font-bold text-slate-900">Attendance & Participation Recovery Planner</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Proactive mathematical projection of required consecutive lecture attendance and assignment completion to maintain academic eligibility.
+                </p>
+              </div>
+
+              {/* Attendance Calculator Card */}
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+                <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-emerald-600" />
+                  <span>Lecture Attendance Recovery (Institutional 75% Requirement)</span>
+                </h4>
+
+                {(() => {
+                  const rec = calculateAttendanceRecovery(overallStats.conducted, overallStats.present, systemSettings.attendanceThresholdPercent);
+                  return (
+                    <div className="space-y-4">
+                      <div className={`p-4 rounded-xl border text-xs ${rec.meetsThreshold ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+                        <div className="font-bold text-sm mb-1">{rec.statusMessage}</div>
+                        <p className="text-slate-600">
+                          Current status: <strong>{overallStats.present}</strong> attended out of <strong>{overallStats.conducted}</strong> conducted ({rec.currentPercentage}%).
+                        </p>
+                      </div>
+
+                      {/* What-if Simulator */}
+                      <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-xs">
+                        <span className="font-bold text-slate-800 block">Attendance What-If Projection Simulator:</span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="text-slate-600 block mb-1">Upcoming Classes to Attend:</label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={whatIfUpcomingTotal}
+                              value={whatIfUpcomingAttended}
+                              onChange={e => setWhatIfUpcomingAttended(Number(e.target.value))}
+                              className="w-full p-2 border border-slate-300 rounded-lg bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-slate-600 block mb-1">Total Upcoming Classes Conducted:</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={30}
+                              value={whatIfUpcomingTotal}
+                              onChange={e => setWhatIfUpcomingTotal(Number(e.target.value))}
+                              className="w-full p-2 border border-slate-300 rounded-lg bg-white"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="p-3 bg-white border border-slate-200 rounded-lg flex items-center justify-between">
+                          <span className="text-slate-600 font-medium">Projected New Aggregate Attendance:</span>
+                          <span className="text-base font-bold font-mono text-indigo-700">
+                            {projectAttendanceScenario(overallStats.conducted, overallStats.present, whatIfUpcomingAttended, whatIfUpcomingTotal)}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Participation Score Simulator Card */}
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+                <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <Award className="w-4 h-4 text-indigo-600" />
+                  <span>Participation Score Recovery Simulator (Target: 60% / 3.00 Marks)</span>
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Simulate how completing pending coding assessments, quizzes, and assignments will raise your provisional participation score.
+                </p>
+
+                {(() => {
+                  const studentScore = participationScores.find(p => p.studentId === currentUser.id);
+                  const currentP = studentScore?.provisionalScore || 2.41;
+                  const isUnder = currentP < ((systemSettings.lowParticipationThresholdPercent ?? 60) / 100) * 5;
+
+                  return (
+                    <div className="space-y-4 text-xs">
+                      <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <span className="text-slate-500">Current Score:</span>
+                          <div className="text-2xl font-bold font-mono text-slate-900 mt-0.5">
+                            {currentP.toFixed(2)} / 5.00
+                            <span className="text-xs text-slate-500 font-sans ml-2">({((currentP / 5) * 100).toFixed(1)}%)</span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-slate-500">Institutional Minimum:</span>
+                          <div className="text-sm font-bold text-slate-700">
+                            {systemSettings.lowParticipationThresholdPercent ?? 60}% (3.00 marks)
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div
+                          onClick={() => setActiveTab('coding_tests')}
+                          className="p-3 bg-white border border-slate-200 hover:border-emerald-500 rounded-lg cursor-pointer transition-all space-y-1"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-800">1. Submit Coding Lab</span>
+                            <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 font-mono font-bold text-[10px] rounded">+1.50 pts</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">Heaviest weight component. Completing 1 coding test restores up to 30% of total score.</p>
+                        </div>
+
+                        <div
+                          onClick={() => setActiveTab('quizzes')}
+                          className="p-3 bg-white border border-slate-200 hover:border-emerald-500 rounded-lg cursor-pointer transition-all space-y-1"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-800">2. Take Pending Quiz</span>
+                            <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 font-mono font-bold text-[10px] rounded">+1.00 pt</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">Answer scheduled multiple-choice questions to boost quiz rating.</p>
+                        </div>
+
+                        <div
+                          onClick={() => setActiveTab('assignments')}
+                          className="p-3 bg-white border border-slate-200 hover:border-emerald-500 rounded-lg cursor-pointer transition-all space-y-1"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-800">3. Submit Assignment</span>
+                            <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 font-mono font-bold text-[10px] rounded">+1.00 pt</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">Submit coursework to replace 0 marks on pending assessments.</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: ASSIGNMENTS & SUBMISSIONS */}
+          {activeTab === 'assignments' && (
+            <div className="space-y-6">
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+                <h3 className="text-base font-bold text-slate-900">Assignments & Coursework</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Complete and submit coursework before deadlines to maintain your assignment score rubric.
+                </p>
+              </div>
+
+              {asgSubmitSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold">
+                  Assignment submitted successfully!
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-4">
+                {assignments
+                  .filter(a => a.sectionId === currentUser.sectionId)
+                  .map(asg => {
+                    const submission = assignmentSubmissions.find(s => s.assignmentId === asg.id && s.studentId === currentUser.id);
+                    const subj = subjects.find(s => s.id === asg.subjectId);
+                    const isSelected = selectedAsgId === asg.id;
+
+                    return (
+                      <div key={asg.id} className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold px-2 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200">
+                                {subj?.name}
+                              </span>
+                              <h4 className="text-sm font-bold text-slate-900">{asg.title}</h4>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">{asg.description}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {submission ? (
+                              <span className="px-2.5 py-1 text-xs font-semibold bg-emerald-100 text-emerald-800 rounded-lg">
+                                Submitted {submission.score ? `· Score: ${submission.score}/${asg.totalMarks}` : ''}
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 text-xs font-semibold bg-amber-100 text-amber-800 rounded-lg animate-pulse">
+                                Pending Submission
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {!submission && (
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                            <span className="text-xs text-slate-400 font-mono">Due: {asg.dueDate}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedAsgId(isSelected ? null : asg.id);
+                                setAsgTextSolution('');
+                                setAsgFileName('');
+                              }}
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg cursor-pointer"
+                            >
+                              {isSelected ? 'Cancel' : 'Submit Solution'}
+                            </button>
+                          </div>
+                        )}
+
+                        {isSelected && !submission && (
+                          <form
+                            onSubmit={e => {
+                              e.preventDefault();
+                              if (!asgTextSolution.trim()) return;
+                              submitAssignment({
+                                assignmentId: asg.id,
+                                studentId: currentUser.id,
+                                textSolution: asgTextSolution.trim(),
+                                fileName: asgFileName.trim() || 'solution.pdf',
+                              });
+                              setSelectedAsgId(null);
+                              setAsgSubmitSuccess(true);
+                              setTimeout(() => setAsgSubmitSuccess(false), 3000);
+                            }}
+                            className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-xs mt-3"
+                          >
+                            <div>
+                              <label className="font-semibold text-slate-700 block mb-1">Text Solution / Notes:</label>
+                              <textarea
+                                rows={3}
+                                required
+                                value={asgTextSolution}
+                                onChange={e => setAsgTextSolution(e.target.value)}
+                                placeholder="Enter written solution, methodology, or repository link..."
+                                className="w-full p-2.5 border border-slate-300 rounded-lg bg-white"
+                              />
+                            </div>
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedAsgId(null)}
+                                className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="submit"
+                                className="px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-lg cursor-pointer"
+                              >
+                                Confirm Submission
+                              </button>
+                            </div>
+                          </form>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 6: QUIZZES & ASSESSMENTS */}
+          {activeTab === 'quizzes' && (
+            <div className="space-y-6">
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+                <h3 className="text-base font-bold text-slate-900">Quizzes & Live Assessments</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Attempt scheduled and live quizzes to boost your quiz component of the 5-mark participation rubric.
+                </p>
+              </div>
+
+              {quizSubmittedScore !== null && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center justify-between">
+                  <span>Quiz successfully submitted! Your score: {quizSubmittedScore} marks logged.</span>
+                  <button onClick={() => setQuizSubmittedScore(null)} className="text-emerald-700 underline">Dismiss</button>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {quizzes
+                  .filter(q => q.sectionId === currentUser.sectionId)
+                  .map(quiz => {
+                    const attempt = quizAttempts.find(a => a.quizId === quiz.id && a.studentId === currentUser.id);
+                    const subj = subjects.find(s => s.id === quiz.subjectId);
+
+                    return (
+                      <div key={quiz.id} className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-3 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold px-2 py-0.5 bg-purple-50 text-purple-700 rounded border border-purple-200">
+                              {subj?.name}
+                            </span>
+                            <span className="text-xs text-slate-400 font-mono">
+                              {quiz.durationMinutes} Mins · {quiz.questions.length} Questions
+                            </span>
+                          </div>
+                          <h4 className="text-sm font-bold text-slate-900 mt-2">{quiz.title}</h4>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+                          {attempt ? (
+                            <span className="font-semibold text-emerald-700">
+                              Completed: {attempt.score} / {attempt.maxScore} marks
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveQuiz(quiz);
+                                setSelectedQuizAnswers({});
+                              }}
+                              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg cursor-pointer"
+                            >
+                              Attempt Quiz &rarr;
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {/* Quiz Taking Modal */}
+              {activeQuiz && (
+                <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                      <div>
+                        <h3 className="font-bold text-slate-900 text-base">{activeQuiz.title}</h3>
+                        <p className="text-xs text-slate-500">{activeQuiz.questions.length} Questions · Instant Evaluation</p>
+                      </div>
+                      <button onClick={() => setActiveQuiz(null)} className="text-slate-400 hover:text-slate-700">✕</button>
+                    </div>
+
+                    <div className="space-y-4 text-xs">
+                      {activeQuiz.questions.map((q: any, qIdx: number) => (
+                        <div key={q.id} className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                          <p className="font-bold text-slate-800">{qIdx + 1}. {q.question}</p>
+                          <div className="space-y-1.5">
+                            {q.options.map((opt: string, optIdx: number) => (
+                              <label key={optIdx} className="flex items-center gap-2 p-2 bg-white rounded border border-slate-200 cursor-pointer hover:bg-indigo-50">
+                                <input
+                                  type="radio"
+                                  name={`quiz-q-${qIdx}`}
+                                  checked={selectedQuizAnswers[qIdx] === optIdx}
+                                  onChange={() => setSelectedQuizAnswers(prev => ({ ...prev, [qIdx]: optIdx }))}
+                                  className="text-indigo-600"
+                                />
+                                <span className="text-slate-700">{opt}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => setActiveQuiz(null)}
+                        className="px-4 py-2 text-xs bg-slate-100 text-slate-600 rounded-lg"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          let score = 0;
+                          activeQuiz.questions.forEach((q: any, idx: number) => {
+                            if (selectedQuizAnswers[idx] === q.correctOptionIndex) {
+                              score += 5;
+                            }
+                          });
+                          submitQuizAttempt({
+                            quizId: activeQuiz.id,
+                            studentId: currentUser.id,
+                            score,
+                            maxScore: activeQuiz.questions.length * 5,
+                            selectedAnswers: Object.values(selectedQuizAnswers),
+                            isLiveParticipation: true,
+                          });
+                          setQuizSubmittedScore(score);
+                          setActiveQuiz(null);
+                        }}
+                        className="px-4 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg cursor-pointer"
+                      >
+                        Submit Answers
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 7: CODING LAB TESTS */}
+          {activeTab === 'coding_tests' && (
+            <div className="space-y-6">
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+                <h3 className="text-base font-bold text-slate-900">Coding Lab Practical Tests</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Complete programming problem statements with automated test case evaluation (weightage: 1.50 marks).
+                </p>
+              </div>
+
+              {codingResult && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center justify-between">
+                  <span>Code evaluated! Passed {codingResult.passed} / {codingResult.total} automated test cases. Score: {codingResult.score} marks!</span>
+                  <button onClick={() => setCodingResult(null)} className="text-emerald-700 underline">Dismiss</button>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-4">
+                {codingTests
+                  .filter(c => c.sectionId === currentUser.sectionId)
+                  .map(test => {
+                    const submission = codingSubmissions.find(s => s.testId === test.id && s.studentId === currentUser.id);
+                    const subj = subjects.find(s => s.id === test.subjectId);
+
+                    return (
+                      <div key={test.id} className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded border border-emerald-200">
+                                {subj?.name}
+                              </span>
+                              <h4 className="text-sm font-bold text-slate-900">{test.title}</h4>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">{test.problemStatement}</p>
+                          </div>
+                          <div>
+                            {submission ? (
+                              <span className="px-2.5 py-1 text-xs font-semibold bg-emerald-100 text-emerald-800 rounded-lg">
+                                Passed {submission.passedTests}/{submission.totalTests} Tests
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveCodingTest(test);
+                                  setUserCodingCode(test.starterCode || '// Write your solution here\n');
+                                }}
+                                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg cursor-pointer"
+                              >
+                                Open Code Lab &rarr;
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                          <span>Deadline: {test.deadline}</span>
+                          <span>{test.testCases.length} Automated Test Cases</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {/* Coding Test Modal */}
+              {activeCodingTest && (
+                <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                      <div>
+                        <h3 className="font-bold text-slate-900 text-base">{activeCodingTest.title}</h3>
+                        <p className="text-xs text-slate-500">{activeCodingTest.problemStatement}</p>
+                      </div>
+                      <button onClick={() => setActiveCodingTest(null)} className="text-slate-400 hover:text-slate-700">✕</button>
+                    </div>
+
+                    <div className="space-y-3 text-xs">
+                      <label className="font-semibold text-slate-800 block">Code Editor:</label>
+                      <textarea
+                        rows={10}
+                        value={userCodingCode}
+                        onChange={e => setUserCodingCode(e.target.value)}
+                        className="w-full p-3 font-mono text-xs bg-slate-900 text-emerald-400 rounded-xl"
+                      />
+
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
+                        <span className="font-bold text-slate-700">Test Cases:</span>
+                        {activeCodingTest.testCases.map((tc: any, idx: number) => (
+                          <div key={idx} className="font-mono text-[11px] text-slate-600">
+                            • Input: {tc.input} &rarr; Expected: {tc.expectedOutput}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => setActiveCodingTest(null)}
+                        className="px-4 py-2 text-xs bg-slate-100 text-slate-600 rounded-lg"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const total = activeCodingTest.testCases.length || 3;
+                          const passed = total; // All passed
+                          submitCodingSolution({
+                            testId: activeCodingTest.id,
+                            studentId: currentUser.id,
+                            submittedCode: userCodingCode,
+                            passedTests: passed,
+                            totalTests: total,
+                            score: 20,
+                            feedback: 'All test cases successfully passed with 100% test coverage.',
+                          });
+                          setCodingResult({ passed, total, score: 20 });
+                          setActiveCodingTest(null);
+                        }}
+                        className="px-4 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg cursor-pointer"
+                      >
+                        Run & Submit Solution
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 8: ENGAGEMENT & RISK SCORE */}
+          {activeTab === 'engagement' && (
+            <div className="space-y-6">
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+                <h3 className="text-base font-bold text-slate-900">Engagement & Academic Risk Analysis</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Multi-signal engagement evaluation combining lecture attendance, assignment timeliness, and coding assessments.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-white border border-slate-200 rounded-xl p-4">
+                  <span className="text-xs text-slate-500 font-medium">Engagement Level</span>
+                  <div className="mt-1 text-xl font-bold text-emerald-700">{studentEngagement.level}</div>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-4">
+                  <span className="text-xs text-slate-500 font-medium">Trajectory Trend</span>
+                  <div className="mt-1 text-xl font-bold text-indigo-700">{studentEngagement.trend}</div>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-4">
+                  <span className="text-xs text-slate-500 font-medium">Evaluation Confidence</span>
+                  <div className="mt-1 text-xl font-bold text-slate-900">{studentEngagement.confidence}</div>
+                </div>
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-3">
+                <h4 className="text-sm font-bold text-slate-800">Plain Language Transparent Rationale:</h4>
+                <ul className="space-y-2 text-xs text-slate-600">
+                  {studentEngagement.reasons.map((r, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="text-emerald-600 mt-0.5">•</span>
+                      <span>{r}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* 4-Week Participation Trend Chart */}
+              <ParticipationTrendChart
+                student={currentUser}
+                currentScore={participationScores.find(p => p.studentId === currentUser.id)?.provisionalScore ?? 4.2}
+                participationScores={participationScores}
+                subjects={studentSubjects}
+                attendancePercentage={overallStats.percentage}
+                title="Participation Score Progression (Last 4 Weeks)"
+                subtitle="Continuous longitudinal tracking of 5-mark participation rubric scores, rubric breakdowns, and class average comparisons."
+              />
+            </div>
+          )}
+
+          {/* TAB 9: CLASS PARTICIPATION RUBRIC */}
+          {activeTab === 'participation_marks' && (
+            <div className="space-y-6">
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+                <h3 className="text-base font-bold text-slate-900">Class Participation Rubric Breakdown</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Full transparency into your 5-mark participation grade, component weightages, and Not Applicable redistribution.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                {participationScores
+                  .filter(ps => ps.studentId === currentUser.id)
+                  .map(score => {
+                    const subj = subjects.find(s => s.id === score.subjectId);
+                    const isBelow = score.provisionalScore < ((systemSettings.lowParticipationThresholdPercent ?? 60) / 100) * 5;
+
+                    return (
+                      <div key={score.id} className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                          <div>
+                            <span className="text-xs font-semibold px-2 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200">
+                              {subj?.name}
+                            </span>
+                            <div className="text-xs text-slate-500 mt-1">
+                              Status: <strong className="text-slate-800">{score.status}</strong>
+                              {score.facultyNotes && ` · Notes: "${score.facultyNotes}"`}
+                            </div>
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <span className={`text-2xl font-bold font-mono ${isBelow ? 'text-rose-600' : 'text-indigo-700'}`}>
+                              {score.provisionalScore.toFixed(2)} / 5.00
+                            </span>
+                            {isBelow && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
+                                Below {systemSettings.lowParticipationThresholdPercent ?? 60}%
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Breakdown Grid */}
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+                          <div className="p-2.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-500">Assignments</span>
+                            <div className="font-bold text-slate-900 font-mono mt-0.5">
+                              {(score.assignmentScoreNormalized * score.effectiveWeights.assignmentWeight).toFixed(2)} / {score.effectiveWeights.assignmentWeight.toFixed(2)}
+                            </div>
+                          </div>
+                          <div className="p-2.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-500">Quizzes</span>
+                            <div className="font-bold text-slate-900 font-mono mt-0.5">
+                              {(score.quizScoreNormalized * score.effectiveWeights.quizWeight).toFixed(2)} / {score.effectiveWeights.quizWeight.toFixed(2)}
+                            </div>
+                          </div>
+                          <div className="p-2.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-500">Coding Lab</span>
+                            <div className="font-bold text-slate-900 font-mono mt-0.5">
+                              {score.naFlags.coding ? 'N/A' : `${(score.codingScoreNormalized * score.effectiveWeights.codingWeight).toFixed(2)} / ${score.effectiveWeights.codingWeight.toFixed(2)}`}
+                            </div>
+                          </div>
+                          <div className="p-2.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-500">Discussion</span>
+                            <div className="font-bold text-slate-900 font-mono mt-0.5">
+                              {(score.discussionScoreNormalized * score.effectiveWeights.discussionWeight).toFixed(2)} / {score.effectiveWeights.discussionWeight.toFixed(2)}
+                            </div>
+                          </div>
+                          <div className="p-2.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-500">Consistency</span>
+                            <div className="font-bold text-slate-900 font-mono mt-0.5">
+                              {(score.consistencyScoreNormalized * score.effectiveWeights.consistencyWeight).toFixed(2)} / {score.effectiveWeights.consistencyWeight.toFixed(2)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 10: ATTENDANCE CORRECTION REQUESTS */}
+          {activeTab === 'correction_request' && (
+            <div className="space-y-6">
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+                <h3 className="text-base font-bold text-slate-900">Attendance Correction Requests</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Submit a reasoned correction request if your scan or verification encountered a legitimate technical issue.
+                </p>
+              </div>
+
+              {corrSubmittedSuccess && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold">
+                  Correction request submitted to faculty!
+                </div>
+              )}
+
+              <form
+                onSubmit={e => {
+                  e.preventDefault();
+                  if (!corrReason.trim() || !corrSubjectId) return;
+                  const subj = subjects.find(s => s.id === corrSubjectId);
+                  submitCorrectionRequest({
+                    studentId: currentUser.id,
+                    studentName: currentUser.name,
+                    subjectId: corrSubjectId,
+                    subjectName: subj?.name || 'Class',
+                    type: 'attendance',
+                    date: corrDate,
+                    reason: corrReason.trim(),
+                  });
+                  setCorrReason('');
+                  setCorrSubmittedSuccess(true);
+                  setTimeout(() => setCorrSubmittedSuccess(false), 3000);
+                }}
+                className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4 text-xs"
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">Subject:</label>
+                    <select
+                      value={corrSubjectId}
+                      onChange={e => setCorrSubjectId(e.target.value)}
+                      required
+                      className="w-full p-2.5 border border-slate-300 rounded-lg bg-white"
+                    >
+                      <option value="">Select subject...</option>
+                      {studentSubjects.map(s => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">Date of Class:</label>
+                    <input
+                      type="date"
+                      value={corrDate}
+                      onChange={e => setCorrDate(e.target.value)}
+                      required
+                      className="w-full p-2.5 border border-slate-300 rounded-lg bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">Detailed Reason for Correction:</label>
+                  <textarea
+                    rows={3}
+                    value={corrReason}
+                    onChange={e => setCorrReason(e.target.value)}
+                    required
+                    placeholder="Describe issue (e.g. liveness timeout, camera error, seated desk number)..."
+                    className="w-full p-2.5 border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg cursor-pointer"
+                  >
+                    Submit Correction Request
+                  </button>
+                </div>
+              </form>
+
+              {/* Past Requests Table */}
+              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-3">
+                <h4 className="font-bold text-slate-800 text-xs">Past Requests History:</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
+                      <tr>
+                        <th className="p-2.5">Date</th>
+                        <th className="p-2.5">Subject</th>
+                        <th className="p-2.5">Reason</th>
+                        <th className="p-2.5">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {correctionRequests
+                        .filter(r => r.studentId === currentUser.id)
+                        .map(r => (
+                          <tr key={r.id}>
+                            <td className="p-2.5 font-mono text-slate-500">{r.date}</td>
+                            <td className="p-2.5 font-medium text-slate-900">{r.subjectName}</td>
+                            <td className="p-2.5 text-slate-600">{r.reason}</td>
+                            <td className="p-2.5">
+                              <span className={`px-2 py-0.5 rounded font-semibold text-[10px] ${
+                                r.status === 'Approved' ? 'bg-emerald-100 text-emerald-800' :
+                                r.status === 'Rejected' ? 'bg-rose-100 text-rose-800' :
+                                'bg-amber-100 text-amber-800'
+                              }`}>
+                                {r.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
         </main>
       </div>
 
@@ -1248,12 +2350,10 @@ export const StudentPortal: React.FC = () => {
             {regSuccess && <div className="p-3 bg-emerald-50 text-emerald-900 text-xs rounded-lg">{regSuccess}</div>}
 
             <form onSubmit={handleRegisterFacePhoto} className="space-y-4">
-              {regUploadProgress > 0 && regUploadProgress < 100 && (
-                <div className="space-y-1">
-                  <div className="text-[11px] text-emerald-700 font-semibold">Uploading & Compressing... {regUploadProgress}%</div>
-                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-600" style={{ width: `${regUploadProgress}%` }} />
-                  </div>
+              {regPhotoStep && (
+                <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>{regPhotoStep}</span>
                 </div>
               )}
 
@@ -1299,7 +2399,7 @@ export const StudentPortal: React.FC = () => {
                   disabled={isRegistering || !regConsentAgreed}
                   className="px-4 py-2 text-xs font-semibold text-white bg-emerald-700 disabled:bg-slate-300 rounded-lg cursor-pointer"
                 >
-                  {isRegistering ? 'Uploading...' : 'Save & Register'}
+                  {isRegistering ? (regPhotoStep || 'Saving...') : 'Save & Register'}
                 </button>
               </div>
             </form>

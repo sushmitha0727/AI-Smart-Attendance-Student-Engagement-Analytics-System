@@ -2,6 +2,7 @@ import * as faceapi from '@vladmandic/face-api';
 import { storage, db } from '../firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { doc, setDoc, collection, addDoc } from 'firebase/firestore';
+import { compressPhoto, saveStudentPhoto } from '../services/photoService';
 
 let modelsLoaded = false;
 let loadingPromise: Promise<void> | null = null;
@@ -150,35 +151,28 @@ export async function resizeImageToJpeg(file: File | Blob): Promise<Blob> {
 }
 
 /**
- * Uploads image using uploadBytes with progress callback and error code formatting
+ * Saves image using Firestore photoService instead of Cloud Storage
  */
 export async function uploadImageResumable(
   storagePath: string,
   blob: Blob,
-  onProgress?: (progressPercent: number) => void
+  onStatusOrProgress?: (status: any) => void
 ): Promise<string> {
-  const startTime = Date.now();
-  console.log(`[Photo Upload] Step 3: Storage upload started for path: ${storagePath} at ${new Date().toISOString()}`);
-  const storageRef = ref(storage, storagePath);
+  const parts = storagePath.split('/');
+  const uid = parts[1] || parts[0];
+  console.log(`[Photo Upload] Step 3: Firestore photo save started for uid: ${uid}`);
 
-  if (onProgress) onProgress(25);
+  if (onStatusOrProgress) onStatusOrProgress('Compressing...');
   try {
-    if (onProgress) onProgress(50);
-    const snapshot = await uploadBytes(storageRef, blob, {
-      contentType: 'image/jpeg',
-    });
-    if (onProgress) onProgress(85);
-    const downloadUrl = await getDownloadURL(snapshot.ref);
-    if (onProgress) onProgress(100);
-    console.log(`[Photo Upload] Step 3: Storage upload completed in ${Date.now() - startTime}ms. URL: ${downloadUrl}`);
-    return downloadUrl;
+    const dataUrl = await compressPhoto(blob);
+    if (onStatusOrProgress) onStatusOrProgress('Saving...');
+    await saveStudentPhoto(uid, dataUrl, true);
+    if (onStatusOrProgress) onStatusOrProgress('Saved');
+    console.log(`[Photo Upload] Step 3: Photo saved to Firestore for uid ${uid}`);
+    return dataUrl;
   } catch (error: any) {
-    console.error('[Photo Upload] Step 3 Full storage error:', error);
-    let msg = error.message || 'Storage upload failed';
-    if (error.code) {
-      msg = `Upload failed (${error.code}): ${error.message}`;
-    }
-    throw new Error(msg);
+    console.error('[Photo Upload] Step 3 Photo save error:', error);
+    throw error;
   }
 }
 

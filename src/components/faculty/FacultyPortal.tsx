@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { QrCodeView } from '../common/QrCodeView';
+import { ParticipationTrendChart } from '../common/ParticipationTrendChart';
 import {
   calculateAttendanceStats,
   calculateParticipationScore,
@@ -234,6 +235,7 @@ export const FacultyPortal: React.FC = () => {
     'roster' | 'messages' | 'assignments' | 'coding' | 'uploads' | 'projects' | 'participation'
   >('roster');
   const [selectedClassSectionFilter, setSelectedClassSectionFilter] = useState<string>('all');
+  const [trendSelectedStudentId, setTrendSelectedStudentId] = useState<string>('');
 
   // Teacher message posting state
   const [classNoticeTitle, setClassNoticeTitle] = useState('');
@@ -502,6 +504,20 @@ export const FacultyPortal: React.FC = () => {
               })}
             </div>
           </div>
+
+          {/* 4-Week Student Participation Score Trends (Recharts Line Graph) */}
+          {myStudents.length > 0 && (
+            <ParticipationTrendChart
+              student={myStudents.find(s => s.id === trendSelectedStudentId) || myStudents[0]}
+              availableStudents={myStudents}
+              showStudentSelector={true}
+              onSelectStudent={st => setTrendSelectedStudentId(st.id)}
+              participationScores={participationScores}
+              subjects={mySubjects}
+              title="Student Participation Score Trends (Last 4 Weeks)"
+              subtitle="Longitudinal 4-week trend tracking across student coding lab tests, assignments, quizzes, discussions, and consistency."
+            />
+          )}
         </div>
       )}
 
@@ -2841,6 +2857,11 @@ export const FacultyPortal: React.FC = () => {
                             <span className="text-[10px] uppercase font-mono px-2 py-0.5 bg-blue-100 text-blue-800 rounded">
                               {subj?.name}
                             </span>
+                            {score.provisionalScore < ((systemSettings.lowParticipationThresholdPercent ?? 60) / 100) * 5.0 && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 bg-rose-100 text-rose-800 border border-rose-200 rounded animate-pulse">
+                                Low Participation (&lt; {systemSettings.lowParticipationThresholdPercent ?? 60}%)
+                              </span>
+                            )}
                           </div>
                           <div className="text-xs text-slate-500 mt-0.5">
                             Provisional Score: <strong>{score.provisionalScore.toFixed(2)}</strong> / 5.00 · Status: <strong>{score.status}</strong>
@@ -2851,6 +2872,34 @@ export const FacultyPortal: React.FC = () => {
                           <span className="text-xl font-bold font-mono text-indigo-700">
                             Approved: {score.approvedScore.toFixed(2)} / 5.0
                           </span>
+
+                          {score.provisionalScore < ((systemSettings.lowParticipationThresholdPercent ?? 60) / 100) * 5.0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                createNotice({
+                                  title: `⚠️ Participation Alert from Prof. ${currentUser.name}: ${subj?.name}`,
+                                  content: `Your provisional participation score in ${subj?.name} is currently ${score.provisionalScore.toFixed(2)}/5.0 (${((score.provisionalScore / 5) * 100).toFixed(1)}%), which is below the ${systemSettings.lowParticipationThresholdPercent ?? 60}% threshold. Please complete your pending lab activities and quizzes promptly.`,
+                                  type: 'participation_alert',
+                                  authorId: currentUser.id,
+                                  authorName: currentUser.name,
+                                  authorRole: 'faculty',
+                                  targetSubjectId: subj?.id,
+                                  targetSectionId: score.sectionId,
+                                  targetStudentId: student?.id,
+                                  urgency: 'critical',
+                                  currentScore: score.provisionalScore,
+                                  thresholdPercent: systemSettings.lowParticipationThresholdPercent ?? 60,
+                                });
+                                alert(`Participation nudge notice sent to ${student?.name}!`);
+                              }}
+                              className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 text-xs font-semibold rounded-lg flex items-center gap-1 cursor-pointer"
+                              title="Send direct engagement alert notification to student"
+                            >
+                              <Bell className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Nudge</span>
+                            </button>
+                          )}
 
                           <button
                             type="button"

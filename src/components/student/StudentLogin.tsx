@@ -100,29 +100,70 @@ export const StudentLogin: React.FC = () => {
               </p>
             </div>
 
-            {/* Quick Demo Fill Pill */}
-            <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3 flex items-center justify-between text-xs">
-              <div>
-                <span className="text-emerald-900 font-semibold block">Demo Account</span>
-                <span className="text-slate-500 text-[11px]">Aarav Sharma (2024CS01)</span>
+            {/* Quick Demo Fill Pills */}
+            <div className="space-y-2">
+              <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3 flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-emerald-900 font-semibold block">Top Performer</span>
+                  <span className="text-slate-500 text-[11px]">Aarav Sharma (2024CS01)</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleQuickFill}
+                    className="px-2 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[11px] font-medium cursor-pointer"
+                  >
+                    Fill
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleInstantDemoStudent}
+                    className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[11px] font-bold cursor-pointer"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>Instant</span>
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleQuickFill}
-                  className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-                >
-                  Fill Form
-                </button>
-                <button
-                  type="button"
-                  onClick={handleInstantDemoStudent}
-                  className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                  title="Instant access without typing"
-                >
-                  <Sparkles className="w-3 h-3" />
-                  <span>Instant</span>
-                </button>
+
+              <div className="bg-rose-50/80 border border-rose-200 rounded-xl p-3 flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-rose-900 font-semibold block flex items-center gap-1">
+                    <span>Critical Alert Student</span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-200 text-rose-900 font-bold font-mono">48.2%</span>
+                  </span>
+                  <span className="text-slate-500 text-[11px]">Priya Patel (2024CS02) · Below 60%</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIdentifier('2024CS02');
+                      setPassword('password123');
+                      setError(null);
+                    }}
+                    className="px-2 py-1 bg-white hover:bg-rose-100 text-rose-800 border border-rose-300 rounded-lg text-[11px] font-medium cursor-pointer"
+                  >
+                    Fill
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsLoading(true);
+                      setTimeout(() => {
+                        const res = login('2024CS02', 'password123', true, 'student');
+                        setIsLoading(false);
+                        if (!res.success) {
+                          setError(res.message || 'Could not sign in.');
+                        }
+                      }, 200);
+                    }}
+                    className="flex items-center gap-1 px-2.5 py-1 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-[11px] font-bold cursor-pointer"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>Instant</span>
+                  </button>
+                </div>
               </div>
             </div>
 

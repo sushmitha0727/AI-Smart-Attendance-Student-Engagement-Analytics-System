@@ -59,6 +59,7 @@ import {
   generateDynamicQrToken,
   calculateParticipationScore,
   validateAttendanceScan,
+  checkAndGenerateParticipationAlerts,
 } from '../utils/academicCalculations';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { testFirestoreConnection, db } from '../firebase/config';
@@ -158,6 +159,8 @@ interface AppContextType {
   createIntervention: (intv: Omit<Intervention, 'id' | 'createdAt'>) => void;
   updateIntervention: (id: string, updates: Partial<Intervention>) => void;
   createNotice: (notice: Omit<Notice, 'id' | 'createdAt'>) => void;
+  dismissNotice: (noticeId: string) => void;
+  markNoticeRead: (noticeId: string) => void;
   submitCorrectionRequest: (req: Omit<CorrectionRequest, 'id' | 'createdAt' | 'status'>) => void;
   reviewCorrectionRequest: (id: string, status: 'Approved' | 'Rejected', facultyNotes: string) => void;
   updateSystemSettings: (settings: Partial<SystemSettings>) => void;
@@ -180,6 +183,8 @@ interface AppContextType {
     sectionName?: string;
     registeredFacePhotoUrl?: string;
     faceConsentGiven?: boolean;
+    hasRegisteredPhoto?: boolean;
+    registeredAt?: string;
   }) => User;
   createFacultyUser: (data: {
     name: string;
@@ -190,6 +195,7 @@ interface AppContextType {
     designation: string;
     subjectIds?: string[];
     sectionIds?: string[];
+    avatarUrl?: string;
   }) => User;
   batchCreateStudents: (students: Array<{
     name: string;
@@ -735,6 +741,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotices(prev => [newNotice, ...prev]);
   };
 
+  const dismissNotice = (noticeId: string) => {
+    setNotices(prev =>
+      prev.map(n => (n.id === noticeId ? { ...n, isDismissed: true } : n))
+    );
+  };
+
+  const markNoticeRead = (noticeId: string) => {
+    setNotices(prev =>
+      prev.map(n => (n.id === noticeId ? { ...n, isRead: true } : n))
+    );
+  };
+
+  // Automated Participation Alert Trigger:
+  // Detects any enrolled students whose participation score is below critical threshold (e.g. 60%)
+  // and delivers an actionable notification to encourage active engagement.
+  useEffect(() => {
+    const threshold = systemSettings.lowParticipationThresholdPercent ?? 60;
+    const alertNotices = checkAndGenerateParticipationAlerts({
+      students: users,
+      participationScores,
+      thresholdPercent: threshold,
+      subjects,
+      assignments,
+      assignmentSubmissions,
+      quizzes,
+      quizAttempts,
+      codingTests,
+      codingSubmissions,
+      existingNotices: notices,
+    });
+
+    if (alertNotices.length > 0) {
+      setNotices(prev => [...alertNotices, ...prev]);
+    }
+  }, [
+    users,
+    participationScores,
+    systemSettings.lowParticipationThresholdPercent,
+    subjects,
+    assignments,
+    assignmentSubmissions,
+    quizzes,
+    quizAttempts,
+    codingTests,
+    codingSubmissions,
+  ]);
+
   const submitCorrectionRequest = (req: Omit<CorrectionRequest, 'id' | 'createdAt' | 'status'>) => {
     const newReq: CorrectionRequest = {
       ...req,
@@ -867,6 +920,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     sectionName?: string;
     registeredFacePhotoUrl?: string;
     faceConsentGiven?: boolean;
+    hasRegisteredPhoto?: boolean;
+    registeredAt?: string;
   }): User => {
     const cleanRoll = data.rollNumber.trim().toUpperCase();
     const existing = users.find(u => u.rollNumber?.toUpperCase() === cleanRoll || u.id.toLowerCase() === cleanRoll.toLowerCase());
@@ -961,6 +1016,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     designation: string;
     subjectIds?: string[];
     sectionIds?: string[];
+    avatarUrl?: string;
   }): User => {
     const empId = (data.employeeId?.trim() || `FAC-${Math.floor(1000 + Math.random() * 9000)}`).toUpperCase();
     const existing = users.find(u => u.id.toLowerCase() === empId.toLowerCase() || u.email.toLowerCase() === data.email.trim().toLowerCase());
@@ -974,7 +1030,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=200&q=80',
       'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&q=80',
     ];
-    const avatar = defaultFacAvatars[users.length % defaultFacAvatars.length];
+    const avatar = data.avatarUrl || defaultFacAvatars[users.length % defaultFacAvatars.length];
 
     const newUser: User = {
       id: empId.toLowerCase(),
@@ -1288,6 +1344,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createIntervention,
         updateIntervention,
         createNotice,
+        dismissNotice,
+        markNoticeRead,
         submitCorrectionRequest,
         reviewCorrectionRequest,
         updateSystemSettings,

@@ -9,8 +9,12 @@ import {
   generateDynamicQrToken,
   validateAttendanceScan,
   DEFAULT_RUBRIC_WEIGHTS,
+  calculateWeeklyParticipationTrends,
+  evaluateStudentParticipationAlert,
+  generateParticipationAlertNotice,
+  checkAndGenerateParticipationAlerts,
 } from './academicCalculations';
-import { AttendanceRecord, AttendanceSession, User } from '../types';
+import { AttendanceRecord, AttendanceSession, ParticipationScore, User, Subject, CodingTest, Quiz, Assignment } from '../types';
 
 test('calculateAttendanceStats calculates correct percentages', () => {
   const records: AttendanceRecord[] = [
@@ -229,3 +233,185 @@ test('validateAttendanceScan enforces window, QR freshness, duplicate, and secti
   assert.equal(wrongSecRes.status, 'SUSPICIOUS');
   assert.ok(wrongSecRes.reason?.includes('not enrolled'));
 });
+
+test('calculateWeeklyParticipationTrends accurately analyzes 4-week progression', () => {
+  const aaravTrends = calculateWeeklyParticipationTrends({
+    studentId: 'stud-aarav',
+    currentParticipationScore: 4.83,
+    attendancePercentage: 87.5,
+  });
+
+  assert.equal(aaravTrends.trendData.length, 4);
+  assert.equal(aaravTrends.currentScore, 4.83);
+  assert.equal(aaravTrends.direction, 'Improving');
+  assert.ok(aaravTrends.delta > 0);
+  assert.ok(aaravTrends.fourWeekAverage > 4.0);
+
+  const priyaTrends = calculateWeeklyParticipationTrends({
+    studentId: 'stud-priya',
+    currentParticipationScore: 2.41,
+    attendancePercentage: 62.5,
+  });
+
+  assert.equal(priyaTrends.trendData.length, 4);
+  assert.equal(priyaTrends.currentScore, 2.41);
+  assert.ok(priyaTrends.trendData[3].score === 2.41);
+  assert.ok(priyaTrends.trendData.every(d => d.targetThreshold === 3.75));
+});
+
+test('evaluateStudentParticipationAlert detects students below critical 60% threshold', () => {
+  const student: User = {
+    id: 'stud-test-low',
+    name: 'Test Low Student',
+    email: 'test@student.univ.edu',
+    role: 'student',
+    avatarUrl: 'https://images.unsplash.com/photo-1?w=100',
+    rollNumber: '2024CS99',
+    sectionId: 'sec-2a',
+  };
+
+  const scores: ParticipationScore[] = [
+    {
+      id: 'ps-1',
+      studentId: 'stud-test-low',
+      subjectId: 'sub-java',
+      sectionId: 'sec-2a',
+      assignmentScoreNormalized: 0.6,
+      quizScoreNormalized: 0.5,
+      codingScoreNormalized: 0.0,
+      discussionScoreNormalized: 0.4,
+      consistencyScoreNormalized: 0.5,
+      naFlags: {},
+      effectiveWeights: DEFAULT_RUBRIC_WEIGHTS,
+      provisionalScore: 2.30, // 2.30 / 5.0 = 46.0% (< 60%)
+      approvedScore: 2.30,
+      status: 'Provisional',
+      lastUpdated: '2026-10-30',
+    },
+  ];
+
+  const subjects: Subject[] = [
+    { id: 'sub-java', code: 'CS301', name: 'Java Programming', programId: 'prog-cse', semesterId: 'sem-3', credits: 4, type: 'Theory+Lab', hasCodingComponent: true, hasLiveQuiz: true },
+  ];
+
+  const codingTests: CodingTest[] = [
+    { id: 'ct-1', subjectId: 'sub-java', sectionId: 'sec-2a', facultyId: 'fac-1', title: 'LRU Cache', problemStatement: '', starterCode: '', testCases: [], deadline: '2026-11-05', totalMarks: 20, createdAt: '2026-10-25' },
+  ];
+
+  const alert = evaluateStudentParticipationAlert({
+    student,
+    participationScores: scores,
+    thresholdPercent: 60,
+    subjects,
+    codingTests,
+    codingSubmissions: [],
+  });
+
+  assert.ok(alert !== null);
+  assert.equal(alert.studentId, 'stud-test-low');
+  assert.equal(alert.currentScore, 2.30);
+  assert.equal(alert.scorePercentage, 46.0);
+  assert.equal(alert.thresholdPercent, 60);
+  assert.equal(alert.pointsNeeded, 0.70); // 3.00 - 2.30 = 0.70
+  assert.equal(alert.urgency, 'critical');
+  assert.ok(alert.recommendations.length > 0);
+  assert.equal(alert.recommendations[0].actionTab, 'coding_tests');
+  assert.ok(alert.recommendations[0].title.includes('LRU Cache'));
+});
+
+test('evaluateStudentParticipationAlert returns null when student score meets or exceeds 60%', () => {
+  const student: User = {
+    id: 'stud-test-high',
+    name: 'Test High Student',
+    email: 'test.high@student.univ.edu',
+    role: 'student',
+    avatarUrl: 'https://images.unsplash.com/photo-1?w=100',
+    rollNumber: '2024CS98',
+    sectionId: 'sec-2a',
+  };
+
+  const scores: ParticipationScore[] = [
+    {
+      id: 'ps-high',
+      studentId: 'stud-test-high',
+      subjectId: 'sub-java',
+      sectionId: 'sec-2a',
+      assignmentScoreNormalized: 0.9,
+      quizScoreNormalized: 0.9,
+      codingScoreNormalized: 0.9,
+      discussionScoreNormalized: 0.8,
+      consistencyScoreNormalized: 1.0,
+      naFlags: {},
+      effectiveWeights: DEFAULT_RUBRIC_WEIGHTS,
+      provisionalScore: 4.50, // 4.50 / 5.0 = 90.0% (>= 60%)
+      approvedScore: 4.50,
+      status: 'Approved',
+      lastUpdated: '2026-10-30',
+    },
+  ];
+
+  const alert = evaluateStudentParticipationAlert({
+    student,
+    participationScores: scores,
+    thresholdPercent: 60,
+  });
+
+  assert.equal(alert, null);
+});
+
+test('checkAndGenerateParticipationAlerts generates and deduplicates notices', () => {
+  const student: User = {
+    id: 'stud-test-low',
+    name: 'Test Low Student',
+    email: 'test@student.univ.edu',
+    role: 'student',
+    avatarUrl: 'https://images.unsplash.com/photo-1?w=100',
+    rollNumber: '2024CS99',
+    sectionId: 'sec-2a',
+  };
+
+  const scores: ParticipationScore[] = [
+    {
+      id: 'ps-1',
+      studentId: 'stud-test-low',
+      subjectId: 'sub-java',
+      sectionId: 'sec-2a',
+      assignmentScoreNormalized: 0.5,
+      quizScoreNormalized: 0.5,
+      codingScoreNormalized: 0.0,
+      discussionScoreNormalized: 0.4,
+      consistencyScoreNormalized: 0.5,
+      naFlags: {},
+      effectiveWeights: DEFAULT_RUBRIC_WEIGHTS,
+      provisionalScore: 2.10,
+      approvedScore: 2.10,
+      status: 'Provisional',
+      lastUpdated: '2026-10-30',
+    },
+  ];
+
+  // 1st run: no existing notices -> creates a new notice
+  const newNotices = checkAndGenerateParticipationAlerts({
+    students: [student],
+    participationScores: scores,
+    thresholdPercent: 60,
+    existingNotices: [],
+  });
+
+  assert.equal(newNotices.length, 1);
+  assert.equal(newNotices[0].type, 'participation_alert');
+  assert.equal(newNotices[0].targetStudentId, 'stud-test-low');
+  assert.equal(newNotices[0].currentScore, 2.10);
+
+  // 2nd run: existing notice already present -> deduplicates and does not create another
+  const subsequentNotices = checkAndGenerateParticipationAlerts({
+    students: [student],
+    participationScores: scores,
+    thresholdPercent: 60,
+    existingNotices: newNotices,
+  });
+
+  assert.equal(subsequentNotices.length, 0);
+});
+
+

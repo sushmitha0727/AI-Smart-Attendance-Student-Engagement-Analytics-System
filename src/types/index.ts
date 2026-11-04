@@ -22,6 +22,8 @@ export interface User {
   yearOfStudy?: number;
   registeredFacePhotoUrl?: string;
   faceConsentGiven?: boolean;
+  hasRegisteredPhoto?: boolean;
+  registeredAt?: string;
 }
 
 export interface AcademicYear {
@@ -341,16 +343,47 @@ export interface Intervention {
   updatedAt?: string;
 }
 
+export interface ParticipationAlertAction {
+  title: string;
+  description: string;
+  potentialGain: string;
+  actionTab: 'assignments' | 'quizzes' | 'coding_tests' | 'participation_marks';
+}
+
+export interface ParticipationAlert {
+  id: string;
+  studentId: string;
+  studentName: string;
+  subjectId?: string;
+  subjectName?: string;
+  currentScore: number;
+  scorePercentage: number;
+  thresholdPercent: number;
+  pointsNeeded: number;
+  urgency: 'critical' | 'warning';
+  title: string;
+  message: string;
+  recommendations: ParticipationAlertAction[];
+  generatedAt: string;
+}
+
 export interface Notice {
   id: string;
   title: string;
   content: string;
-  type: 'announcement' | 'deadline' | 'attendance_warning' | 'quiz_reminder' | 'coding_reminder' | 'notice';
+  type: 'announcement' | 'deadline' | 'attendance_warning' | 'quiz_reminder' | 'coding_reminder' | 'notice' | 'participation_alert';
   authorId: string;
   authorName: string;
-  authorRole: 'admin' | 'faculty';
+  authorRole: 'admin' | 'faculty' | 'system';
   targetSubjectId?: string; // Optional if class-specific
   targetSectionId?: string; // Must target specific section for faculty notices
+  targetStudentId?: string; // Target specific individual student for personalized notifications
+  urgency?: 'critical' | 'warning' | 'info';
+  currentScore?: number;
+  thresholdPercent?: number;
+  actionRecommendations?: ParticipationAlertAction[];
+  isRead?: boolean;
+  isDismissed?: boolean;
   scheduledFor?: string;
   createdAt: string;
 }
@@ -379,4 +412,6 @@ export interface SystemSettings {
   livenessStrictness: 'Standard' | 'Strict' | 'Relaxed';
   dataRetentionDays: number;
   rubricWeights: ParticipationScoreRubric;
+  lowParticipationThresholdPercent: number; // Default 60 (%)
 }
+

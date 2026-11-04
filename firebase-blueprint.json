@@ -17,10 +17,22 @@
         "sectionId": { "type": "string", "description": "Internal section identifier" },
         "yearOfStudy": { "type": "number", "description": "Academic study year (1 to 5)" },
         "faceConsentGiven": { "type": "boolean", "description": "Biometric face verification consent" },
-        "registeredFacePhotoUrl": { "type": "string", "description": "Firebase Storage URL for profile/face photo" },
+        "hasRegisteredPhoto": { "type": "boolean", "description": "Whether face photo is registered in studentPhotos" },
+        "registeredAt": { "type": "string", "description": "ISO timestamp of face registration" },
         "createdAt": { "type": "string", "description": "ISO timestamp of enrollment" }
       },
       "required": ["studentId", "name", "email"]
+    },
+    "StudentPhoto": {
+      "title": "StudentPhoto",
+      "description": "Firestore document storing compressed student face photo dataUrl (< 150 KB, max 320px)",
+      "type": "object",
+      "properties": {
+        "dataUrl": { "type": "string", "description": "Base64 data URL string of compressed JPEG face photo" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of photo update" },
+        "consentGiven": { "type": "boolean", "description": "Whether biometric face consent was recorded" }
+      },
+      "required": ["dataUrl", "updatedAt"]
     },
     "Faculty": {
       "title": "Faculty",
@@ -214,6 +226,10 @@
     "/notifications/{notificationId}": {
       "schema": "Notification",
       "description": "Class announcements and academic notices"
+    },
+    "/studentPhotos/{uid}": {
+      "schema": "StudentPhoto",
+      "description": "Firestore collection storing compressed student face photo data URLs"
     }
   }
 }

@@ -116,6 +116,7 @@ export const AdminPortal: React.FC = () => {
   const [attThreshold, setAttThreshold] = useState(systemSettings.attendanceThresholdPercent);
   const [honorThreshold, setHonorThreshold] = useState(systemSettings.honorRollThresholdPercent);
   const [windowMins, setWindowMins] = useState(systemSettings.sessionWindowMinutes);
+  const [partThreshold, setPartThreshold] = useState(systemSettings.lowParticipationThresholdPercent ?? 60);
 
   const studentsList = users.filter(u => u.role === 'student');
   const facultyList = users.filter(u => u.role === 'faculty');
@@ -1169,6 +1170,7 @@ export const AdminPortal: React.FC = () => {
                 attendanceThresholdPercent: attThreshold,
                 honorRollThresholdPercent: honorThreshold,
                 sessionWindowMinutes: windowMins,
+                lowParticipationThresholdPercent: partThreshold,
               });
               alert('Institution settings saved successfully!');
             }}
@@ -1219,6 +1221,23 @@ export const AdminPortal: React.FC = () => {
               />
               <span className="text-[11px] text-slate-500">
                 Rotating dynamic QR will accept scans only for this duration after scheduled lecture start.
+              </span>
+            </div>
+
+            <div className="p-3.5 bg-amber-50/60 border border-amber-200 rounded-xl space-y-2">
+              <label className="font-semibold text-amber-950 block">
+                Critical Student Participation Alert Threshold: {partThreshold}% ({((partThreshold / 100) * 5).toFixed(1)} / 5.0 Marks)
+              </label>
+              <input
+                type="range"
+                min={40}
+                max={80}
+                value={partThreshold}
+                onChange={e => setPartThreshold(Number(e.target.value))}
+                className="w-full accent-amber-600"
+              />
+              <span className="text-[11px] text-amber-800 block">
+                Enrolled students falling below this participation score percentage receive an immediate proactive notification banner and actionable recovery recommendations to encourage active engagement.
               </span>
             </div>
 

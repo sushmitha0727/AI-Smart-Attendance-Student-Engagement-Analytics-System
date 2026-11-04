@@ -38,7 +38,8 @@ import {
   triggerCsvDownload,
 } from '../../utils/csvExporter';
 import { uploadProfileImage } from '../../services/storageService';
-import { resizeImageToJpeg, uploadImageResumable, validateRegistrationPhotoWithTimeout } from '../../utils/faceVerification';
+import { resizeImageToJpeg, validateRegistrationPhotoWithTimeout } from '../../utils/faceVerification';
+import { compressPhoto, saveStudentPhoto, getStudentPhoto } from '../../services/photoService';
 import { db } from '../../firebase/config';
 import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 
@@ -78,13 +79,37 @@ export const IdProvisioningManager: React.FC = () => {
     return () => unsub();
   }, []);
 
+  // Student Photo Cache in React State (only)
+  const [studentPhotoCache, setStudentPhotoCache] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let isMounted = true;
+    const studentUsers = users.filter(u => u.role === 'student');
+    studentUsers.forEach(async student => {
+      if (!studentPhotoCache[student.id]) {
+        try {
+          const photo = await getStudentPhoto(student.id);
+          if (isMounted && photo) {
+            setStudentPhotoCache(prev => ({ ...prev, [student.id]: photo }));
+          }
+        } catch (err) {
+          console.error(`Failed to fetch photo for student ${student.id}:`, err);
+        }
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [users]);
+
   // Admin Edit Photo Modal State
   const [showAdminPhotoModal, setShowAdminPhotoModal] = useState(false);
   const [editingPhotoUser, setEditingPhotoUser] = useState<User | null>(null);
   const [adminNewPhotoUrl, setAdminNewPhotoUrl] = useState('');
   const [adminNewPhotoFile, setAdminNewPhotoFile] = useState<File | null>(null);
   const [adminPhotoUploading, setAdminPhotoUploading] = useState(false);
-  const [adminUploadProgress, setAdminUploadProgress] = useState(0);
+  const [adminPhotoStep, setAdminPhotoStep] = useState<string | null>(null);
+  const [photoSaveStep, setPhotoSaveStep] = useState<string | null>(null);
 
   // Student Form State
   const [studentName, setStudentName] = useState('');
@@ -212,64 +237,21 @@ export const IdProvisioningManager: React.FC = () => {
       setErrorMessage('Student Name and Roll Number are required.');
       return;
     }
-    if (!studentPhotoFile && !studentPhotoPreview) {
-      setErrorMessage('Photo is required.');
-      return;
-    }
 
     setIsCreatingStudent(true);
+    let created: User | null = null;
+
     try {
-      const studentId = studentRoll.trim().toUpperCase().replace(/[^a-z0-9]/g, '-');
-      let downloadUrl = studentPhotoPreview || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80';
-      let storagePath = `studentPhotos/${studentId}/registered.jpg`;
-
-      if (studentPhotoFile) {
-        // Step 1: Resize/compress
-        console.log('[Photo Upload] Step 1: Resize/compress started at', new Date().toISOString());
-        const t1 = Date.now();
-        const compressedBlob = await resizeImageToJpeg(studentPhotoFile);
-        console.log(`[Photo Upload] Step 1: Completed in ${Date.now() - t1}ms`);
-
-        // Step 2: Face Validation with 20s timeout
-        const t2 = Date.now();
-        const img = new Image();
-        const imageUrl = studentPhotoPreview || URL.createObjectURL(studentPhotoFile);
-        img.src = imageUrl;
-        await new Promise((res, rej) => {
-          img.onload = res;
-          img.onerror = rej;
-        });
-        const validCheck = await validateRegistrationPhotoWithTimeout(img);
-        if (!validCheck.valid) {
-          setErrorMessage(validCheck.message || 'Student face photo validation failed.');
-          return;
-        }
-        console.log(`[Photo Upload] Step 2: Completed in ${Date.now() - t2}ms`);
-
-        // Step 3: Storage Upload with progress & error reporting
-        downloadUrl = await uploadImageResumable(storagePath, compressedBlob, pct => setAdminUploadProgress(pct));
-      }
-
-      // Step 4: Firestore Update (photoPath, photoURL, photoUpdatedAt only)
-      console.log('[Photo Upload] Step 4: Firestore update started at', new Date().toISOString());
-      const t4 = Date.now();
-      const photoUpdatedAt = Date.now();
-      await updateDoc(doc(db, 'users', studentId), {
-        photoPath: storagePath,
-        photoURL: downloadUrl,
-        photoUpdatedAt,
-      }).catch(async () => {});
-      console.log(`[Photo Upload] Step 4: Completed in ${Date.now() - t4}ms`);
-
       const chosenSection = resolvedStudentSections.find(s => s.id === studentSectionId) || resolvedStudentSections[0];
       const targetSecId = chosenSection ? chosenSection.id : studentSectionId;
       const targetSecName = chosenSection ? chosenSection.name : studentSectionId;
       const semId = getSemesterIdForYear(studentYearOfStudy);
 
-      const created = createStudentUser({
-        name: studentName,
-        rollNumber: studentRoll,
-        email: studentEmail,
+      // Requirement 4: Create the student FIRST.
+      created = createStudentUser({
+        name: studentName.trim(),
+        rollNumber: studentRoll.trim().toUpperCase(),
+        email: studentEmail.trim() || `${studentRoll.trim().toLowerCase()}@student.univ.edu`,
         password: studentPassword,
         programId: studentProgramId,
         semesterId: semId,
@@ -277,22 +259,46 @@ export const IdProvisioningManager: React.FC = () => {
         yearOfStudy: studentYearOfStudy,
         sectionName: targetSecName,
         faceConsentGiven: studentFaceConsent,
-        registeredFacePhotoUrl: downloadUrl,
+        hasRegisteredPhoto: false,
       });
 
       setIssuedSlipUser(created);
-      setSuccessMessage(`Student ID ${created.rollNumber} successfully created and registered with face photo!`);
+
+      // Attempt photo save using photoService if provided
+      if (studentPhotoFile || studentPhotoPreview) {
+        try {
+          const photoToCompress = studentPhotoFile || (await (await fetch(studentPhotoPreview!)).blob());
+
+          setPhotoSaveStep('Compressing...');
+          const dataUrl = await compressPhoto(photoToCompress);
+
+          setPhotoSaveStep('Saving...');
+          await saveStudentPhoto(created.id, dataUrl, studentFaceConsent);
+
+          setPhotoSaveStep('Saved');
+          // Cache photo in React state only
+          setStudentPhotoCache(prev => ({ ...prev, [created!.id]: dataUrl }));
+          setSuccessMessage(`Student ID ${created.rollNumber} successfully created and registered with face photo!`);
+        } catch (photoErr: any) {
+          console.error('[Photo Save] Error saving student photo:', photoErr);
+          // Requirement 4: Never block student creation. Show this exact message:
+          setErrorMessage('Student created, but the photo could not be saved. You can add it later.');
+        }
+      } else {
+        setSuccessMessage(`Student ID ${created.rollNumber} successfully created!`);
+      }
+
       setStudentName('');
       setStudentRoll('');
       setStudentEmail('');
       setStudentPhotoFile(null);
       setStudentPhotoPreview(null);
     } catch (err: any) {
-      console.error('[Photo Upload] Error in student creation / photo upload:', err);
+      console.error('[Student Creation] Error creating student account:', err);
       setErrorMessage(err.message || 'Failed to create student account.');
     } finally {
       setIsCreatingStudent(false);
-      setAdminUploadProgress(0);
+      setPhotoSaveStep(null);
     }
   };
 
@@ -308,13 +314,14 @@ export const IdProvisioningManager: React.FC = () => {
       }
 
       const facultyId = facultyEmpId || `fac-${Date.now().toString(36)}`;
-      let downloadUrl = 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80';
-      let storagePath = '';
+      let facultyAvatar = 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80';
 
       if (facultyPhotoFile) {
-        const compressed = await resizeImageToJpeg(facultyPhotoFile);
-        storagePath = `facultyPhotos/${facultyId}/profile.jpg`;
-        downloadUrl = await uploadImageResumable(storagePath, compressed);
+        try {
+          facultyAvatar = await compressPhoto(facultyPhotoFile);
+        } catch (photoErr) {
+          console.error('Faculty photo compression notice:', photoErr);
+        }
       }
 
       const created = createFacultyUser({
@@ -326,18 +333,8 @@ export const IdProvisioningManager: React.FC = () => {
         designation: facultyDesignation,
         subjectIds: assignedSubjectId ? [assignedSubjectId] : [],
         sectionIds: assignedSectionId ? [assignedSectionId] : [],
+        avatarUrl: facultyAvatar,
       });
-
-      await Promise.all([
-        updateDoc(doc(db, 'users', created.id), {
-          profilePhotoPath: storagePath,
-          avatarUrl: downloadUrl,
-          updatedAt: new Date().toISOString(),
-        }),
-        updateDoc(doc(db, 'faculty', created.id), {
-          avatarUrl: downloadUrl,
-        }).catch(() => {}),
-      ]);
 
       setIssuedSlipUser(created);
       setSuccessMessage(`Faculty ID successfully created and appointed!`);
@@ -347,6 +344,7 @@ export const IdProvisioningManager: React.FC = () => {
       setFacultyPhotoFile(null);
       setFacultyPhotoPreview(null);
     } catch (err: any) {
+      console.error('Faculty creation error:', err);
       setErrorMessage(err.message || 'Failed to create faculty account.');
     }
   };
@@ -689,14 +687,22 @@ export const IdProvisioningManager: React.FC = () => {
                   />
                 </div>
               </div>
+
+              {photoSaveStep && (
+                <div className="md:col-span-2 p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs font-semibold flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                  <span>{photoSaveStep}</span>
+                </div>
+              )}
             </div>
 
             <div className="pt-2 border-t border-slate-100 flex justify-end">
               <button
                 type="submit"
-                className="px-5 py-2.5 bg-[#162b78] hover:bg-[#10205c] text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer"
+                disabled={isCreatingStudent}
+                className="px-5 py-2.5 bg-[#162b78] hover:bg-[#10205c] disabled:bg-slate-300 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer"
               >
-                Issue & Register Student ID
+                {isCreatingStudent ? (photoSaveStep || 'Creating...') : 'Issue & Register Student ID'}
               </button>
             </div>
           </form>
@@ -929,12 +935,13 @@ export const IdProvisioningManager: React.FC = () => {
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {filteredUsers.map(user => {
                   const isCopied = copiedId === user.id;
+                  const displayAvatar = (user.role === 'student' && studentPhotoCache[user.id]) || user.avatarUrl;
                   return (
                     <tr key={user.id} className="hover:bg-slate-50/70">
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-3">
                           <img
-                            src={user.avatarUrl}
+                            src={displayAvatar}
                             alt={user.name}
                             className="w-8 h-8 rounded-full object-cover ring-1 ring-slate-200 shrink-0"
                           />
@@ -1079,12 +1086,10 @@ export const IdProvisioningManager: React.FC = () => {
                 />
               </div>
 
-              {adminPhotoUploading && (
-                <div className="space-y-1">
-                  <div className="text-[11px] text-indigo-700 font-semibold">Uploading & compressing... {adminUploadProgress}%</div>
-                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-indigo-600 transition-all duration-300" style={{ width: `${adminUploadProgress}%` }} />
-                  </div>
+              {adminPhotoStep && (
+                <div className="p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs font-semibold flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                  <span>{adminPhotoStep}</span>
                 </div>
               )}
 
@@ -1113,68 +1118,60 @@ export const IdProvisioningManager: React.FC = () => {
                   type="button"
                   disabled={adminPhotoUploading}
                   onClick={async () => {
+                    if (!editingPhotoUser) return;
                     setAdminPhotoUploading(true);
                     try {
-                      let finalUrl = adminNewPhotoUrl;
-                      let storagePath = '';
-                      if (adminNewPhotoFile) {
-                        // Step 1: Resize/compress
-                        console.log('[Photo Upload] Step 1: Resize/compress started at', new Date().toISOString());
-                        const t1 = Date.now();
-                        const compressed = await resizeImageToJpeg(adminNewPhotoFile);
-                        console.log(`[Photo Upload] Step 1: Completed in ${Date.now() - t1}ms`);
-
-                        // Step 2: Face validation if student
-                        if (editingPhotoUser.role === 'student') {
-                          const t2 = Date.now();
-                          const img = new Image();
-                          const url = URL.createObjectURL(adminNewPhotoFile);
-                          img.src = url;
-                          await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
-                          const valCheck = await validateRegistrationPhotoWithTimeout(img);
-                          URL.revokeObjectURL(url);
-                          if (!valCheck.valid) {
-                            setErrorMessage(valCheck.message || 'Face validation failed.');
-                            return;
-                          }
-                          console.log(`[Photo Upload] Step 2: Completed in ${Date.now() - t2}ms`);
-                        }
-
-                        // Step 3: Storage Upload
-                        storagePath = editingPhotoUser.role === 'student'
-                          ? `studentPhotos/${editingPhotoUser.id}/registered.jpg`
-                          : `facultyPhotos/${editingPhotoUser.id}/profile.jpg`;
-                        
-                        finalUrl = await uploadImageResumable(storagePath, compressed, pct => setAdminUploadProgress(pct));
+                      if (!adminNewPhotoFile) {
+                        setShowAdminPhotoModal(false);
+                        return;
                       }
 
-                      // Step 4: Firestore Update (photoPath, photoURL, photoUpdatedAt only)
-                      console.log('[Photo Upload] Step 4: Firestore update started at', new Date().toISOString());
-                      const t4 = Date.now();
-                      const photoUpdatedAt = Date.now();
-                      await updateDoc(doc(db, 'users', editingPhotoUser.id), {
-                        photoPath: storagePath,
-                        photoURL: finalUrl,
-                        photoUpdatedAt,
-                      });
-                      console.log(`[Photo Upload] Step 4: Completed in ${Date.now() - t4}ms`);
+                      // Step 1: Face validation if student
+                      if (editingPhotoUser.role === 'student') {
+                        const img = new Image();
+                        const url = URL.createObjectURL(adminNewPhotoFile);
+                        img.src = url;
+                        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+                        const valCheck = await validateRegistrationPhotoWithTimeout(img);
+                        URL.revokeObjectURL(url);
+                        if (!valCheck.valid) {
+                          setErrorMessage(valCheck.message || 'Face validation failed.');
+                          return;
+                        }
 
-                      // Update local React state immediately
-                      updateUserProfilePhoto(editingPhotoUser.id, finalUrl);
+                        // Step 2: Compress
+                        setAdminPhotoStep('Compressing...');
+                        const dataUrl = await compressPhoto(adminNewPhotoFile);
+
+                        // Step 3: Save to Firestore studentPhotos/{uid}
+                        setAdminPhotoStep('Saving...');
+                        await saveStudentPhoto(editingPhotoUser.id, dataUrl, true);
+
+                        // Step 4: Saved & Cache in React state only
+                        setAdminPhotoStep('Saved');
+                        setStudentPhotoCache(prev => ({ ...prev, [editingPhotoUser.id]: dataUrl }));
+                      } else {
+                        // Faculty Photo
+                        setAdminPhotoStep('Compressing...');
+                        const dataUrl = await compressPhoto(adminNewPhotoFile);
+                        setAdminPhotoStep('Saving...');
+                        updateUserProfilePhoto(editingPhotoUser.id, dataUrl);
+                        setAdminPhotoStep('Saved');
+                      }
 
                       setSuccessMessage(`Photo successfully updated for ${editingPhotoUser.name}!`);
-                      setShowAdminPhotoModal(false);
+                      setTimeout(() => setShowAdminPhotoModal(false), 800);
                     } catch (err: any) {
                       console.error('[Photo Upload] Admin photo modal error:', err);
                       setErrorMessage(err.message || 'Failed to update photo.');
                     } finally {
                       setAdminPhotoUploading(false);
-                      setAdminUploadProgress(0);
+                      setAdminPhotoStep(null);
                     }
                   }}
                   className="px-4 py-2 text-xs font-semibold text-white bg-[#162b78] hover:bg-[#10205c] disabled:bg-slate-300 rounded-lg cursor-pointer"
                 >
-                  {adminPhotoUploading ? 'Uploading...' : 'Save Updated Photo'}
+                  {adminPhotoUploading ? (adminPhotoStep || 'Saving...') : 'Save Updated Photo'}
                 </button>
               </div>
             </div>
