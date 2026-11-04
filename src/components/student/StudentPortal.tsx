@@ -37,7 +37,7 @@ import {
 import { uploadAssignmentFile, uploadProfileImage } from '../../services/storageService';
 import {
   loadFaceApiModels,
-  validateRegistrationPhoto,
+  validateRegistrationPhotoWithTimeout,
   resizeImageToJpeg,
   uploadImageResumable,
   computeFaceDescriptor,
@@ -46,9 +46,10 @@ import {
   calculateNod,
   calculateMAR,
 } from '../../utils/faceVerification';
-import { storage, db } from '../../firebase/config';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { doc, updateDoc, addDoc, collection } from 'firebase/firestore';
+import { auth, storage, db } from '../../firebase/config';
+import { ref, getDownloadURL } from 'firebase/storage';
+import { uploadStudentPhotoResumable } from '../../services/storageService';
+import { doc, updateDoc, addDoc, collection, onSnapshot } from 'firebase/firestore';
 import * as faceapi from '@vladmandic/face-api';
 
 export const StudentPortal: React.FC = () => {
@@ -92,10 +93,26 @@ export const StudentPortal: React.FC = () => {
     | 'correction_request'
   >('dashboard');
 
-  // Registered Photo / Enrollment State
-  const hasRegisteredPhoto = Boolean(
-    currentUser.registeredFacePhotoUrl || (currentUser as any).registeredFacePhotoPath
-  );
+  const [firestorePhotoUrl, setFirestorePhotoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const unsub = onSnapshot(doc(db, 'users', currentUser.id), snap => {
+      if (snap.exists()) {
+        const data = snap.data();
+        const rawUrl = data.photoURL || data.registeredFacePhotoUrl;
+        if (rawUrl) {
+          const v = data.photoUpdatedAt || Date.now();
+          const timedUrl = `${rawUrl}${rawUrl.includes('?') ? '&' : '?'}v=${v}`;
+          setFirestorePhotoUrl(timedUrl);
+        }
+      }
+    });
+    return () => unsub();
+  }, [currentUser?.id]);
+
+  const activePhotoUrl = firestorePhotoUrl || currentUser.registeredFacePhotoUrl || currentUser.avatarUrl;
+  const hasRegisteredPhoto = Boolean(activePhotoUrl);
   const [showRegisterPhotoModal, setShowRegisterPhotoModal] = useState(false);
   const [regConsentAgreed, setRegConsentAgreed] = useState(false);
   const [regFile, setRegFile] = useState<File | null>(null);
@@ -247,59 +264,67 @@ export const StudentPortal: React.FC = () => {
     setRegError(null);
     setRegSuccess(null);
 
+    if (!auth.currentUser) {
+      setRegError('You are not signed in with Firebase. Please log out and sign in again.');
+      return;
+    }
     if (!regConsentAgreed) {
       setRegError('You must grant consent for your photo to be used for attendance verification.');
       return;
     }
     if (!regFile && !regPreview) {
-      setRegError('Please capture or upload your face photograph.');
+      setRegError('Photo is required.');
       return;
     }
 
     setIsRegistering(true);
     try {
+      if (!auth.currentUser) {
+        throw new Error('You are not signed in with Firebase. Please log out and sign in again.');
+      }
+
+      // Step 1: Resize/compress
+      console.log('[Photo Upload] Step 1: Resize/compress started at', new Date().toISOString());
+      const t1 = Date.now();
+      const sourceBlob = regFile || (await (await fetch(regPreview || '')).blob());
+      const resizedBlob = await resizeImageToJpeg(sourceBlob);
+      console.log(`[Photo Upload] Step 1: Completed in ${Date.now() - t1}ms`);
+
+      // Step 2: Face Validation with 20s timeout
+      const t2 = Date.now();
       const img = new Image();
-      const imageUrl = regPreview || (regFile ? URL.createObjectURL(regFile) : '');
+      const imageUrl = regPreview || URL.createObjectURL(sourceBlob);
       img.src = imageUrl;
       await new Promise((resolve, reject) => {
         img.onload = resolve;
         img.onerror = reject;
       });
 
-      const validation = await validateRegistrationPhoto(img);
+      const validation = await validateRegistrationPhotoWithTimeout(img);
       if (!validation.valid) {
         setRegError(validation.message || 'Face validation failed.');
-        setIsRegistering(false);
         return;
       }
+      console.log(`[Photo Upload] Step 2: Completed in ${Date.now() - t2}ms`);
 
-      const sourceBlob = regFile || (await (await fetch(imageUrl)).blob());
-      const resizedBlob = await resizeImageToJpeg(sourceBlob);
+      // Step 3: Storage Upload using uploadStudentPhotoResumable
+      const { downloadUrl, storagePath } = await uploadStudentPhotoResumable(resizedBlob, pct => setRegUploadProgress(pct));
 
-      const storagePath = `studentPhotos/${currentUser.id}/registered.jpg`;
-      const downloadUrl = await uploadImageResumable(storagePath, resizedBlob, pct => setRegUploadProgress(pct));
-      const timestamp = new Date().toISOString();
-
-      await Promise.all([
-        updateDoc(doc(db, 'users', currentUser.id), {
-          registeredFacePhotoPath: storagePath,
-          registeredFacePhotoUrl: downloadUrl,
-          avatarUrl: downloadUrl,
-          faceConsentGiven: true,
-          registeredAt: timestamp,
-        }),
-        updateDoc(doc(db, 'students', currentUser.id), {
-          registeredFacePhotoUrl: downloadUrl,
-        }).catch(() => {}),
-      ]);
-
-      const updatedUser = {
-        ...currentUser,
+      // Step 4: Firestore Update
+      console.log('[Photo Upload] Step 4: Firestore update started at', new Date().toISOString());
+      const t4 = Date.now();
+      const photoUpdatedAt = Date.now();
+      await updateDoc(doc(db, 'users', currentUser.id), {
+        photoPath: storagePath,
+        photoURL: downloadUrl,
+        photoUpdatedAt,
+        registeredFacePhotoPath: storagePath,
         registeredFacePhotoUrl: downloadUrl,
         avatarUrl: downloadUrl,
         faceConsentGiven: true,
-      };
-      setCurrentUser(updatedUser);
+      });
+      console.log('firestore saved');
+      console.log(`[Photo Upload] Step 4: Completed in ${Date.now() - t4}ms`);
 
       setRegSuccess('Face photo successfully registered and verified!');
       setTimeout(() => {
@@ -307,8 +332,22 @@ export const StudentPortal: React.FC = () => {
         setRegSuccess(null);
       }, 1500);
     } catch (err: any) {
-      console.error('Registration photo error:', err);
-      setRegError(err.message || 'Failed to register face photo.');
+      console.error('[Photo Upload] Registration photo error:', err);
+      let friendlyMsg = 'Upload failed. Please try again.';
+      const code = err?.code || '';
+      const msg = err?.message || '';
+      if (code === 'storage/unauthorized' || msg.includes('unauthorized')) {
+        friendlyMsg = 'You are not signed in or not allowed to upload. Please log out and sign in again.';
+      } else if (code === 'storage/bucket-not-found' || code === 'storage/project-not-found' || msg.includes('bucket')) {
+        friendlyMsg = 'Cloud Storage is not set up for this project.';
+      } else if (code === 'storage/canceled' || msg.includes('canceled') || msg.includes('cancelled')) {
+        friendlyMsg = 'Upload cancelled.';
+      } else if (msg.includes('timed out') || msg.includes('timeout')) {
+        friendlyMsg = 'Upload timed out. Check your connection and try again.';
+      } else if (msg.includes('not signed in')) {
+        friendlyMsg = msg;
+      }
+      setRegError(friendlyMsg);
     } finally {
       setIsRegistering(false);
       setRegUploadProgress(0);

@@ -38,7 +38,7 @@ import {
   triggerCsvDownload,
 } from '../../utils/csvExporter';
 import { uploadProfileImage } from '../../services/storageService';
-import { resizeImageToJpeg, uploadImageResumable, validateRegistrationPhoto } from '../../utils/faceVerification';
+import { resizeImageToJpeg, uploadImageResumable, validateRegistrationPhotoWithTimeout } from '../../utils/faceVerification';
 import { db } from '../../firebase/config';
 import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 
@@ -201,40 +201,65 @@ export const IdProvisioningManager: React.FC = () => {
     }
   };
 
+  const [isCreatingStudent, setIsCreatingStudent] = useState(false);
+
   const handleCreateStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
 
+    if (!studentName.trim() || !studentRoll.trim()) {
+      setErrorMessage('Student Name and Roll Number are required.');
+      return;
+    }
+    if (!studentPhotoFile && !studentPhotoPreview) {
+      setErrorMessage('Photo is required.');
+      return;
+    }
+
+    setIsCreatingStudent(true);
     try {
-      if (!studentName.trim() || !studentRoll.trim()) {
-        setErrorMessage('Student Name and Roll Number are required.');
-        return;
-      }
-      if (!studentPhotoFile) {
-        setErrorMessage('A registered face photo is required for students.');
-        return;
-      }
-
-      // Validate single face in photo
-      const img = new Image();
-      const imageUrl = URL.createObjectURL(studentPhotoFile);
-      img.src = imageUrl;
-      await new Promise((res, rej) => {
-        img.onload = res;
-        img.onerror = rej;
-      });
-      const validCheck = await validateRegistrationPhoto(img);
-      if (!validCheck.valid) {
-        setErrorMessage(validCheck.message || 'Student face photo validation failed.');
-        return;
-      }
-
-      // Resize & compress
-      const compressedBlob = await resizeImageToJpeg(studentPhotoFile);
       const studentId = studentRoll.trim().toUpperCase().replace(/[^a-z0-9]/g, '-');
-      const storagePath = `studentPhotos/${studentId}/registered.jpg`;
-      const downloadUrl = await uploadImageResumable(storagePath, compressedBlob);
+      let downloadUrl = studentPhotoPreview || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80';
+      let storagePath = `studentPhotos/${studentId}/registered.jpg`;
+
+      if (studentPhotoFile) {
+        // Step 1: Resize/compress
+        console.log('[Photo Upload] Step 1: Resize/compress started at', new Date().toISOString());
+        const t1 = Date.now();
+        const compressedBlob = await resizeImageToJpeg(studentPhotoFile);
+        console.log(`[Photo Upload] Step 1: Completed in ${Date.now() - t1}ms`);
+
+        // Step 2: Face Validation with 20s timeout
+        const t2 = Date.now();
+        const img = new Image();
+        const imageUrl = studentPhotoPreview || URL.createObjectURL(studentPhotoFile);
+        img.src = imageUrl;
+        await new Promise((res, rej) => {
+          img.onload = res;
+          img.onerror = rej;
+        });
+        const validCheck = await validateRegistrationPhotoWithTimeout(img);
+        if (!validCheck.valid) {
+          setErrorMessage(validCheck.message || 'Student face photo validation failed.');
+          return;
+        }
+        console.log(`[Photo Upload] Step 2: Completed in ${Date.now() - t2}ms`);
+
+        // Step 3: Storage Upload with progress & error reporting
+        downloadUrl = await uploadImageResumable(storagePath, compressedBlob, pct => setAdminUploadProgress(pct));
+      }
+
+      // Step 4: Firestore Update (photoPath, photoURL, photoUpdatedAt only)
+      console.log('[Photo Upload] Step 4: Firestore update started at', new Date().toISOString());
+      const t4 = Date.now();
+      const photoUpdatedAt = Date.now();
+      await updateDoc(doc(db, 'users', studentId), {
+        photoPath: storagePath,
+        photoURL: downloadUrl,
+        photoUpdatedAt,
+      }).catch(async () => {});
+      console.log(`[Photo Upload] Step 4: Completed in ${Date.now() - t4}ms`);
 
       const chosenSection = resolvedStudentSections.find(s => s.id === studentSectionId) || resolvedStudentSections[0];
       const targetSecId = chosenSection ? chosenSection.id : studentSectionId;
@@ -255,19 +280,6 @@ export const IdProvisioningManager: React.FC = () => {
         registeredFacePhotoUrl: downloadUrl,
       });
 
-      // Update Firestore with path & URL in parallel
-      await Promise.all([
-        updateDoc(doc(db, 'users', created.id), {
-          registeredFacePhotoPath: storagePath,
-          registeredFacePhotoUrl: downloadUrl,
-          avatarUrl: downloadUrl,
-          updatedAt: new Date().toISOString(),
-        }),
-        updateDoc(doc(db, 'students', created.id), {
-          registeredFacePhotoUrl: downloadUrl,
-        }).catch(() => {}),
-      ]);
-
       setIssuedSlipUser(created);
       setSuccessMessage(`Student ID ${created.rollNumber} successfully created and registered with face photo!`);
       setStudentName('');
@@ -276,7 +288,11 @@ export const IdProvisioningManager: React.FC = () => {
       setStudentPhotoFile(null);
       setStudentPhotoPreview(null);
     } catch (err: any) {
+      console.error('[Photo Upload] Error in student creation / photo upload:', err);
       setErrorMessage(err.message || 'Failed to create student account.');
+    } finally {
+      setIsCreatingStudent(false);
+      setAdminUploadProgress(0);
     }
   };
 
@@ -1102,7 +1118,29 @@ export const IdProvisioningManager: React.FC = () => {
                       let finalUrl = adminNewPhotoUrl;
                       let storagePath = '';
                       if (adminNewPhotoFile) {
+                        // Step 1: Resize/compress
+                        console.log('[Photo Upload] Step 1: Resize/compress started at', new Date().toISOString());
+                        const t1 = Date.now();
                         const compressed = await resizeImageToJpeg(adminNewPhotoFile);
+                        console.log(`[Photo Upload] Step 1: Completed in ${Date.now() - t1}ms`);
+
+                        // Step 2: Face validation if student
+                        if (editingPhotoUser.role === 'student') {
+                          const t2 = Date.now();
+                          const img = new Image();
+                          const url = URL.createObjectURL(adminNewPhotoFile);
+                          img.src = url;
+                          await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+                          const valCheck = await validateRegistrationPhotoWithTimeout(img);
+                          URL.revokeObjectURL(url);
+                          if (!valCheck.valid) {
+                            setErrorMessage(valCheck.message || 'Face validation failed.');
+                            return;
+                          }
+                          console.log(`[Photo Upload] Step 2: Completed in ${Date.now() - t2}ms`);
+                        }
+
+                        // Step 3: Storage Upload
                         storagePath = editingPhotoUser.role === 'student'
                           ? `studentPhotos/${editingPhotoUser.id}/registered.jpg`
                           : `facultyPhotos/${editingPhotoUser.id}/profile.jpg`;
@@ -1110,24 +1148,16 @@ export const IdProvisioningManager: React.FC = () => {
                         finalUrl = await uploadImageResumable(storagePath, compressed, pct => setAdminUploadProgress(pct));
                       }
 
-                      // Update Firestore using updateDoc (fast, only changed fields)
-                      const updatePayload: any = {
-                        avatarUrl: finalUrl,
-                        updatedAt: new Date().toISOString(),
-                      };
-                      if (editingPhotoUser.role === 'student') {
-                        updatePayload.registeredFacePhotoUrl = finalUrl;
-                        if (storagePath) updatePayload.registeredFacePhotoPath = storagePath;
-                      } else {
-                        if (storagePath) updatePayload.profilePhotoPath = storagePath;
-                      }
-
-                      await Promise.all([
-                        updateDoc(doc(db, 'users', editingPhotoUser.id), updatePayload),
-                        updateDoc(doc(db, editingPhotoUser.role === 'student' ? 'students' : 'faculty', editingPhotoUser.id), {
-                          [editingPhotoUser.role === 'student' ? 'registeredFacePhotoUrl' : 'avatarUrl']: finalUrl,
-                        }).catch(() => {}),
-                      ]);
+                      // Step 4: Firestore Update (photoPath, photoURL, photoUpdatedAt only)
+                      console.log('[Photo Upload] Step 4: Firestore update started at', new Date().toISOString());
+                      const t4 = Date.now();
+                      const photoUpdatedAt = Date.now();
+                      await updateDoc(doc(db, 'users', editingPhotoUser.id), {
+                        photoPath: storagePath,
+                        photoURL: finalUrl,
+                        photoUpdatedAt,
+                      });
+                      console.log(`[Photo Upload] Step 4: Completed in ${Date.now() - t4}ms`);
 
                       // Update local React state immediately
                       updateUserProfilePhoto(editingPhotoUser.id, finalUrl);
@@ -1135,6 +1165,7 @@ export const IdProvisioningManager: React.FC = () => {
                       setSuccessMessage(`Photo successfully updated for ${editingPhotoUser.name}!`);
                       setShowAdminPhotoModal(false);
                     } catch (err: any) {
+                      console.error('[Photo Upload] Admin photo modal error:', err);
                       setErrorMessage(err.message || 'Failed to update photo.');
                     } finally {
                       setAdminPhotoUploading(false);

@@ -1,6 +1,6 @@
 import * as faceapi from '@vladmandic/face-api';
 import { storage, db } from '../firebase/config';
-import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { doc, setDoc, collection, addDoc } from 'firebase/firestore';
 
 let modelsLoaded = false;
@@ -150,34 +150,57 @@ export async function resizeImageToJpeg(file: File | Blob): Promise<Blob> {
 }
 
 /**
- * Uploads image using uploadBytesResumable with progress callback
+ * Uploads image using uploadBytes with progress callback and error code formatting
  */
 export async function uploadImageResumable(
   storagePath: string,
   blob: Blob,
   onProgress?: (progressPercent: number) => void
 ): Promise<string> {
+  const startTime = Date.now();
+  console.log(`[Photo Upload] Step 3: Storage upload started for path: ${storagePath} at ${new Date().toISOString()}`);
   const storageRef = ref(storage, storagePath);
-  const uploadTask = uploadBytesResumable(storageRef, blob, {
-    contentType: 'image/jpeg',
-  });
 
-  return new Promise((resolve, reject) => {
-    uploadTask.on(
-      'state_changed',
-      (snapshot: UploadTaskSnapshot) => {
-        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        if (onProgress) onProgress(Math.round(progress));
-      },
-      error => {
-        reject(error);
-      },
-      async () => {
-        const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-        resolve(downloadUrl);
-      }
-    );
-  });
+  if (onProgress) onProgress(25);
+  try {
+    if (onProgress) onProgress(50);
+    const snapshot = await uploadBytes(storageRef, blob, {
+      contentType: 'image/jpeg',
+    });
+    if (onProgress) onProgress(85);
+    const downloadUrl = await getDownloadURL(snapshot.ref);
+    if (onProgress) onProgress(100);
+    console.log(`[Photo Upload] Step 3: Storage upload completed in ${Date.now() - startTime}ms. URL: ${downloadUrl}`);
+    return downloadUrl;
+  } catch (error: any) {
+    console.error('[Photo Upload] Step 3 Full storage error:', error);
+    let msg = error.message || 'Storage upload failed';
+    if (error.code) {
+      msg = `Upload failed (${error.code}): ${error.message}`;
+    }
+    throw new Error(msg);
+  }
+}
+
+/**
+ * Validates registration photo with a 20-second timeout and step logging
+ */
+export async function validateRegistrationPhotoWithTimeout(
+  input: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement
+): Promise<{ valid: boolean; message?: string }> {
+  console.log('[Photo Upload] Step 2: Face validation started at', new Date().toISOString());
+  const startTime = Date.now();
+  const timeoutPromise = new Promise<{ valid: boolean; message: string }>((_, reject) =>
+    setTimeout(() => reject(new Error('Face validation timed out after 20 seconds.')), 20000)
+  );
+  try {
+    const res = await Promise.race([validateRegistrationPhoto(input), timeoutPromise]);
+    console.log(`[Photo Upload] Step 2: Face validation completed in ${Date.now() - startTime}ms`);
+    return res;
+  } catch (err: any) {
+    console.error('[Photo Upload] Step 2 Face validation error/timeout:', err);
+    throw err;
+  }
 }
 
 /**

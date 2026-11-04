@@ -7,12 +7,17 @@ import { AppProvider, useApp } from '../context/AppContext';
 import { AdminLogin } from '../components/admin/AdminLogin';
 import { AdminPortal } from '../components/admin/AdminPortal';
 import { Shield, LogOut, Loader2 } from 'lucide-react';
+import { loadFaceApiModels } from '../utils/faceVerification';
 import '../index.css';
 
 const AdminAppContent: React.FC = () => {
   const { setCurrentUser, setIsAuthenticated, currentUser, isAuthenticated, logout: contextLogout } = useApp();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadFaceApiModels().catch(err => console.log('Background face-api model preload notice:', err));
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {

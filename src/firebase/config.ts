@@ -20,6 +20,7 @@ export const db: Firestore = dbId && dbId !== '(default)'
 
 // Initialize Firebase Storage
 export const storage: FirebaseStorage = getStorage(app);
+console.log('Firebase Storage Bucket:', firebaseConfig.storageBucket || (storage as any).bucket || 'default');
 
 /**
  * Validates connection to Cloud Firestore server

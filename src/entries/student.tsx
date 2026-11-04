@@ -4,11 +4,16 @@ import { AppProvider, useApp } from '../context/AppContext';
 import { StudentLogin } from '../components/student/StudentLogin';
 import { StudentPortal } from '../components/student/StudentPortal';
 import { GraduationCap, LogOut } from 'lucide-react';
+import { loadFaceApiModels } from '../utils/faceVerification';
 import '../index.css';
 
 const StudentAppContent: React.FC = () => {
   const { currentUser, isAuthenticated, logout } = useApp();
   const [roleError, setRoleError] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadFaceApiModels().catch(err => console.log('Background face-api model preload notice:', err));
+  }, []);
 
   useEffect(() => {
     if (isAuthenticated && currentUser.role !== 'student') {
