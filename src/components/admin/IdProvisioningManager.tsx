@@ -40,8 +40,9 @@ import {
 import { uploadProfileImage } from '../../services/storageService';
 import { resizeImageToJpeg, validateRegistrationPhotoWithTimeout } from '../../utils/faceVerification';
 import { compressPhoto, saveStudentPhoto, getStudentPhoto } from '../../services/photoService';
-import { db } from '../../firebase/config';
+import { db, storage } from '../../firebase/config';
 import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { ref, deleteObject } from 'firebase/storage';
 
 export const IdProvisioningManager: React.FC = () => {
   const {
@@ -983,6 +984,41 @@ export const IdProvisioningManager: React.FC = () => {
                           >
                             <Camera className="w-3.5 h-3.5" />
                           </button>
+                          {user.role === 'student' && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (window.confirm(`Reset attendance reference for ${user.name}?`)) {
+                                  try {
+                                    if (user.attendanceRefPath) {
+                                      await deleteObject(ref(storage, user.attendanceRefPath)).catch(() => {});
+                                    }
+                                    await updateDoc(doc(db, 'users', user.id), {
+                                      attendanceRefPath: null,
+                                      attendanceRefURL: null,
+                                      attendanceRefAt: null,
+                                      attendanceRefLocked: false,
+                                      attendanceRefConsent: false,
+                                    });
+                                    await updateDoc(doc(db, 'students', user.id), {
+                                      attendanceRefPath: null,
+                                      attendanceRefURL: null,
+                                      attendanceRefAt: null,
+                                      attendanceRefLocked: false,
+                                      attendanceRefConsent: false,
+                                    }).catch(() => {});
+                                    setSuccessMessage(`Reset attendance reference for ${user.name}.`);
+                                  } catch (e: any) {
+                                    setErrorMessage(e.message || 'Failed to reset attendance reference');
+                                  }
+                                }
+                              }}
+                              className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors cursor-pointer"
+                              title="Reset Attendance Reference Photo"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleResetPassword(user)}
@@ -1032,7 +1068,7 @@ export const IdProvisioningManager: React.FC = () => {
                 <div key={req.id} className="py-4 flex items-center justify-between">
                   <div className="space-y-1">
                     <div className="font-semibold text-slate-900 text-xs">
-                      {req.studentName} ({req.rollNumber})
+                      {req.studentName} ({req.rollNumber}) {req.type === 'attendanceReference' && <span className="ml-2 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-semibold">Attendance Reference Reset</span>}
                     </div>
                     <p className="text-xs text-slate-600">Reason: {req.reason}</p>
                     <div className="text-[10px] text-slate-400">Status: <span className="font-bold text-amber-600">{req.status}</span></div>
@@ -1044,8 +1080,26 @@ export const IdProvisioningManager: React.FC = () => {
                         onClick={async () => {
                           try {
                             await updateDoc(doc(db, 'photoChangeRequests', req.id), { status: 'Approved' });
-                            await updateDoc(doc(db, 'users', req.studentId), { registeredFacePhotoUrl: '', registeredFacePhotoPath: '' });
-                            setSuccessMessage(`Approved photo change for ${req.studentName}.`);
+                            if (req.type === 'attendanceReference') {
+                              await deleteObject(ref(storage, `attendanceReference/${req.studentId}/reference.jpg`)).catch(() => {});
+                              await updateDoc(doc(db, 'users', req.studentId), {
+                                attendanceRefPath: null,
+                                attendanceRefURL: null,
+                                attendanceRefAt: null,
+                                attendanceRefLocked: false,
+                                attendanceRefConsent: false,
+                              });
+                              await updateDoc(doc(db, 'students', req.studentId), {
+                                attendanceRefPath: null,
+                                attendanceRefURL: null,
+                                attendanceRefAt: null,
+                                attendanceRefLocked: false,
+                                attendanceRefConsent: false,
+                              }).catch(() => {});
+                            } else {
+                              await updateDoc(doc(db, 'users', req.studentId), { registeredFacePhotoUrl: '', registeredFacePhotoPath: '' });
+                            }
+                            setSuccessMessage(`Approved request for ${req.studentName}.`);
                           } catch (e: any) {
                             setErrorMessage(e.message || 'Failed to approve');
                           }

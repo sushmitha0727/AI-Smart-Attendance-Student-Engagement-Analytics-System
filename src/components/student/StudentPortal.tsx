@@ -51,9 +51,9 @@ import {
   calculateMAR,
 } from '../../utils/faceVerification';
 import { auth, storage, db } from '../../firebase/config';
-import { ref, getDownloadURL } from 'firebase/storage';
+import { ref, getDownloadURL, uploadBytesResumable } from 'firebase/storage';
 import { compressPhoto, saveStudentPhoto, getStudentPhoto } from '../../services/photoService';
-import { doc, updateDoc, addDoc, collection, onSnapshot } from 'firebase/firestore';
+import { doc, updateDoc, addDoc, collection, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import * as faceapi from '@vladmandic/face-api';
 
 export const StudentPortal: React.FC = () => {
@@ -140,6 +140,11 @@ export const StudentPortal: React.FC = () => {
   const [showPhotoChangeModal, setShowPhotoChangeModal] = useState(false);
   const [photoChangeReason, setPhotoChangeReason] = useState('');
   const [photoChangeSubmitted, setPhotoChangeSubmitted] = useState(false);
+
+  // Attendance Reference Reset Request State
+  const [showResetRefModal, setShowResetRefModal] = useState(false);
+  const [resetRefReason, setResetRefReason] = useState('');
+  const [resetRefSubmitted, setResetRefSubmitted] = useState(false);
 
   // Attendance Scan workflow state
   const [scanStep, setScanStep] = useState<'consent' | 'challenge' | 'matching' | 'scanner' | 'result'>('consent');
@@ -403,6 +408,32 @@ export const StudentPortal: React.FC = () => {
     }
   };
 
+  const handleResetRefRequestSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetRefReason.trim()) return;
+
+    try {
+      await addDoc(collection(db, 'photoChangeRequests'), {
+        studentId: currentUser.id,
+        studentName: currentUser.name,
+        rollNumber: currentUser.rollNumber,
+        type: 'attendanceReference',
+        reason: resetRefReason.trim(),
+        status: 'Pending',
+        timestamp: new Date().toISOString(),
+      });
+      setResetRefSubmitted(true);
+      setTimeout(() => {
+        setShowResetRefModal(false);
+        setResetRefSubmitted(false);
+        setResetRefReason('');
+      }, 2000);
+    } catch (err: any) {
+      console.error('Attendance reference reset request error:', err);
+      alert('Failed to submit attendance reference reset request.');
+    }
+  };
+
   const handleTeacherReviewSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!teacherReviewReason.trim()) return;
@@ -451,12 +482,14 @@ export const StudentPortal: React.FC = () => {
         throw new Error('Camera access requires HTTPS or is not supported by your browser.');
       }
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
       });
       mediaStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
+      // Wait about 700 ms after stream starts so auto-exposure settles before any capture
+      await new Promise(r => setTimeout(r, 700));
       setCameraActive(true);
     } catch (err: any) {
       console.error('Camera access error:', err);
@@ -497,14 +530,7 @@ export const StudentPortal: React.FC = () => {
 
           timeoutId = setTimeout(() => {
             setLivenessAttempts(prev => prev + 1);
-            if (livenessAttempts >= 2) {
-              setChallengeStatusMessage('Liveness challenge timed out. Max attempts reached.');
-            } else {
-              setChallengeStatusMessage('Challenge timed out. Retrying...');
-              setTimeout(() => {
-                setCurrentChallengeIndex(i => (i + 1) % livenessChallenges.length);
-              }, 1000);
-            }
+            setChallengeStatusMessage('Challenge timed out');
           }, 12000);
 
           const detectLoop = async () => {
@@ -560,21 +586,11 @@ export const StudentPortal: React.FC = () => {
                     setCurrentChallengeIndex(i => i + 1);
                     consecutiveSuccessFrames = 0;
                   } else {
-                    // Capture live frame to canvas before stopping camera
-                    if (videoRef.current && liveCaptureCanvasRef.current) {
-                      const canvas = liveCaptureCanvasRef.current;
-                      canvas.width = videoRef.current.videoWidth || 640;
-                      canvas.height = videoRef.current.videoHeight || 480;
-                      const ctx = canvas.getContext('2d');
-                      if (ctx) {
-                        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-                        setLiveCaptureDataUrl(canvas.toDataURL('image/jpeg', 0.85));
-                      }
-                    }
-
-                    stopCamera();
-                    setScanStep('matching');
-                    executeFaceMatch();
+                    setChallengeStatusMessage('Look straight at the camera and hold still...');
+                    setTimeout(() => {
+                      setScanStep('matching');
+                      executeFaceMatch();
+                    }, 2000);
                     return;
                   }
                 }
@@ -598,7 +614,16 @@ export const StudentPortal: React.FC = () => {
     };
   }, [scanStep, cameraActive, currentChallengeIndex, livenessChallenges]);
 
-  // Execute Step 3 Registered Face Match (PART 1 REQUIREMENTS)
+const DEBUG_FACE = false;
+const MATCH_THRESHOLD = 0.55;
+const MEDIAN_LIMIT = 0.60;
+// FALSE-ACCEPT / FALSE-REJECT TRADE-OFF:
+// Lower MATCH_THRESHOLD (e.g. 0.50) strictly reduces false accepts (higher security),
+// but increases false rejects for genuine users with varying lighting/expressions.
+// Higher MATCH_THRESHOLD (e.g. 0.60) reduces false rejects, but increases false accepts.
+// Requiring BOTH >= 3 frames < MATCH_THRESHOLD AND median < MEDIAN_LIMIT balances security and robustness.
+
+  // Execute Step 3 Registered Face Match (IMPROVED ACCURACY & QUALITY GATE)
   const executeFaceMatch = async () => {
     setMatchAnalysisState('comparing');
     setRegisteredPhotoLoading(true);
@@ -607,7 +632,6 @@ export const StudentPortal: React.FC = () => {
     try {
       await loadFaceApiModels();
 
-      // Requirement 5: Read registered photo from getStudentPhoto instead of Storage
       let freshUrl = await getStudentPhoto(currentUser.id);
       if (!freshUrl) {
         freshUrl = cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl || currentUser.avatarUrl;
@@ -621,68 +645,127 @@ export const StudentPortal: React.FC = () => {
         return;
       }
 
-      // Load registered image robustly (with crossOrigin retry fallback)
+      // Load registered image robustly with crossOrigin and decode()
       const loadImgRobust = (url: string): Promise<HTMLImageElement> => {
         return new Promise((resolve, reject) => {
           const img = new Image();
           if (!url.startsWith('data:')) {
             img.crossOrigin = 'anonymous';
           }
-          img.onload = () => resolve(img);
-          img.onerror = () => {
-            if (img.crossOrigin) {
-              const imgRetry = new Image();
-              imgRetry.onload = () => resolve(imgRetry);
-              imgRetry.onerror = (err) => reject(err);
-              imgRetry.src = url;
-            } else {
-              reject(new Error('Registered photo could not be loaded'));
+          img.onload = async () => {
+            try {
+              if (img.decode) await img.decode();
+              resolve(img);
+            } catch (e) {
+              resolve(img);
             }
           };
+          img.onerror = () => reject(new Error('Registered photo could not be loaded'));
           img.src = url;
         });
       };
 
-      const regImg = await loadImgRobust(freshUrl).catch(() => {
+      const regImg = await loadImgRobust(freshUrl).catch(() => null);
+      if (!regImg) {
         setRegisteredPhotoError(true);
         setMatchAnalysisState('no_match');
-        return null;
-      });
+        return;
+      }
 
-      if (!regImg) return;
-
-      const registeredDescriptor = await computeFaceDescriptor(regImg);
+      // Compute registered descriptor ONCE per session at natural size using ssdMobilenetv1
+      const registeredDescriptor = await computeFaceDescriptor(regImg, true);
       if (!registeredDescriptor) {
         setRegisteredPhotoError(true);
+        setChallengeStatusMessage('Registered photo has no detectable face. Contact the administrator.');
         setMatchAnalysisState('no_match');
         return;
       }
 
-      // Compute descriptor from live capture canvas / image
-      if (!liveCaptureCanvasRef.current && !liveCaptureDataUrl) {
-        setMatchAnalysisState('no_match');
-        return;
-      }
+      // Collect candidate frames over ~2.5 seconds using raw video (not mirrored canvas)
+      const acceptedDistances: number[] = [];
+      const startTime = Date.now();
+      let candidateCount = 0;
 
-      const liveImg = await loadImgRobust(liveCaptureDataUrl || '').catch(() => null);
-      if (!liveImg) {
-        setMatchAnalysisState('no_match');
-        return;
-      }
+      if (videoRef.current && videoRef.current.readyState >= 2) {
+        const video = videoRef.current;
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 720;
+        const ctx = canvas.getContext('2d');
 
-      // Require euclidean distance < 0.5 across at least 3 consecutive frames or checks
-      let consecutiveMatches = 0;
-      for (let i = 0; i < 3; i++) {
-        const liveDescriptor = await computeFaceDescriptor(liveImg);
-        if (liveDescriptor) {
-          const distance = faceapi.euclideanDistance(registeredDescriptor, liveDescriptor);
-          if (distance < 0.5) {
-            consecutiveMatches++;
+        while (candidateCount < 10 && (Date.now() - startTime) < 6000) {
+          if (!ctx || !videoRef.current) break;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          try {
+            const detection = await faceapi
+              .detectSingleFace(canvas, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.7 }))
+              .withFaceLandmarks();
+
+            if (detection) {
+              const box = detection.detection.box;
+              // Quality gate: box at least 160px wide and at least 20% of frame width
+              if (box.width >= 160 && box.width >= canvas.width * 0.20) {
+                const landmarks = detection.landmarks;
+                const nose = landmarks.getNose();
+                const jaw = landmarks.getJawOutline();
+                const noseTip = nose[3];
+                const leftJaw = jaw[0];
+                const rightJaw = jaw[16];
+                const jawMidpointX = (leftJaw.x + rightJaw.x) / 2;
+                const jawWidth = Math.abs(rightJaw.x - leftJaw.x);
+                const noseOffset = Math.abs(noseTip.x - jawMidpointX);
+
+                // Roughly frontal: nose not more than 15% of jaw width away from jaw midpoint
+                if (jawWidth === 0 || (noseOffset / jawWidth) <= 0.15) {
+                  const leftEye = landmarks.getLeftEye();
+                  const rightEye = landmarks.getRightEye();
+                  const ear = (calculateEAR(leftEye) + calculateEAR(rightEye)) / 2;
+
+                  if (ear >= 0.20) {
+                    const desc = await computeFaceDescriptor(canvas, true);
+                    if (desc) {
+                      const distance = faceapi.euclideanDistance(registeredDescriptor, desc);
+                      acceptedDistances.push(distance);
+                      if (DEBUG_FACE) {
+                        console.debug('[FaceMatch] Frame accepted, distance:', distance);
+                      }
+                      candidateCount++;
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            // ignore frame capture error
           }
+          await new Promise(r => setTimeout(r, 250));
         }
       }
 
-      if (consecutiveMatches >= 3) {
+      if (acceptedDistances.length < 3) {
+        setMatchAnalysisState('no_match');
+        setMatchAttemptsCount(c => c + 1);
+        return;
+      }
+
+      // Compute median distance and matches below threshold
+      const sorted = [...acceptedDistances].sort((a, b) => a - b);
+      const medianDistance = sorted[Math.floor(sorted.length / 2)];
+      const matchesBelowThreshold = acceptedDistances.filter(d => d < MATCH_THRESHOLD).length;
+
+      if (DEBUG_FACE) {
+        console.debug('[FaceMatch] Decision summary:', {
+          acceptedDistances,
+          medianDistance,
+          matchesBelowThreshold,
+          MATCH_THRESHOLD,
+          MEDIAN_LIMIT,
+        });
+      }
+
+      // PASS only if at least 3 accepted frames have distance < MATCH_THRESHOLD AND median distance < MEDIAN_LIMIT
+      if (matchesBelowThreshold >= 3 && medianDistance < MEDIAN_LIMIT) {
         setMatchAnalysisState('match');
         setVerificationVerifiedAt(Date.now());
       } else {
@@ -694,6 +777,9 @@ export const StudentPortal: React.FC = () => {
       setRegisteredPhotoError(true);
       setMatchAnalysisState('no_match');
       setMatchAttemptsCount(c => c + 1);
+    } finally {
+      // Privacy and cleanup: stop camera tracks, clear canvases, drop references
+      stopCamera();
     }
   };
 
@@ -778,14 +864,23 @@ export const StudentPortal: React.FC = () => {
                   <span className="text-xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-700">
                     {currentUser.rollNumber}
                   </span>
-                  {hasRegisteredPhoto ? (
-                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      Face Registered
+                  {currentUser.attendanceRefLocked ? (
+                    <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                      Attendance face: Enrolled
                     </span>
                   ) : (
                     <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                      Photo Not Registered
+                      Attendance face: Not enrolled
                     </span>
+                  )}
+                  {currentUser.attendanceRefLocked && (
+                    <button
+                      type="button"
+                      onClick={() => setShowResetRefModal(true)}
+                      className="text-[11px] text-indigo-600 hover:text-indigo-800 underline font-semibold cursor-pointer"
+                    >
+                      Request reset
+                    </button>
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-3 mt-1">
@@ -1114,13 +1209,26 @@ export const StudentPortal: React.FC = () => {
               {/* Step 2: Liveness Challenge */}
               {scanStep === 'challenge' && (
                 <div className="space-y-4 py-2">
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-center">
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-center space-y-2">
                     <span className="text-xs font-semibold text-amber-900 uppercase tracking-wide">
-                      Random Liveness Challenge ({currentChallengeIndex + 1} of {livenessChallenges.length}):
+                      Random Liveness Challenge:
                     </span>
-                    <p className="text-sm font-bold text-amber-950 mt-1 font-mono">
-                      "{livenessChallenges[currentChallengeIndex]}"
+                    <p className="text-sm font-bold text-amber-950 font-mono">
+                      "{livenessChallenges[currentChallengeIndex] || 'Blink your eyes twice'}"
                     </p>
+                    <div className="pt-2 border-t border-amber-200 flex items-center justify-between text-xs">
+                      <span className="text-amber-800">Stuck or didn't detect?</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          initializeLivenessChallenges();
+                          setChallengeStatusMessage('New challenge loaded. Try again.');
+                        }}
+                        className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded font-semibold cursor-pointer transition-colors"
+                      >
+                        Refresh Challenge
+                      </button>
+                    </div>
                   </div>
 
                   {cameraError && (
@@ -1199,6 +1307,7 @@ export const StudentPortal: React.FC = () => {
                   {matchAnalysisState === 'no_match' && !registeredPhotoError && (
                     <div className="space-y-3">
                       <p className="text-xs text-rose-600 font-semibold">Face doesn't match institutional enrollment record.</p>
+                      <p className="text-xs text-slate-500 italic">Tip: Face a window or light, remove glasses or a cap if possible, and keep a neutral expression.</p>
                       {matchAttemptsCount < 3 ? (
                         <button
                           type="button"

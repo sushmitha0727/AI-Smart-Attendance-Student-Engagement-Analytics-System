@@ -118,9 +118,8 @@ export function isNonStudentId(uid?: string | null): boolean {
 }
 
 /**
- * Saves a compressed student photo to Firestore at studentPhotos/{uid}
- * and records hasRegisteredPhoto: true and registeredAt in users/{uid}.
- * Does NOT place raw photo data in users/{uid} or localStorage.
+ * Saves a compressed student photo to Firestore at users/{uid} (and students/{uid})
+ * and records hasRegisteredPhoto: true and registeredAt.
  */
 export async function saveStudentPhoto(
   uid: string,
@@ -149,23 +148,31 @@ export async function saveStudentPhoto(
   });
 
   try {
-    // 1. Write exclusively to studentPhotos/{uid}
-    const photoDocRef = doc(db, 'studentPhotos', uid);
-    await setDoc(photoDocRef, {
-      dataUrl,
-      updatedAt,
-      consentGiven,
-    });
-
-    // 2. Update users/{uid} with metadata only (NO image data)
+    // 1. Save to users/{uid}
     const userDocRef = doc(db, 'users', uid);
-    await updateDoc(userDocRef, {
-      hasRegisteredPhoto: true,
-      registeredAt: updatedAt,
-    }).catch(err => {
-      // If user document does not exist yet or update fails, log notice
-      console.warn('Notice updating users document metadata for photo status:', err?.message);
-    });
+    await setDoc(
+      userDocRef,
+      {
+        hasRegisteredPhoto: true,
+        registeredAt: updatedAt,
+        registeredFacePhotoDataUrl: dataUrl,
+        faceConsentGiven: consentGiven,
+      },
+      { merge: true }
+    );
+
+    // 2. Also update students/{uid} if exists
+    const studentDocRef = doc(db, 'students', uid);
+    await setDoc(
+      studentDocRef,
+      {
+        hasRegisteredPhoto: true,
+        registeredAt: updatedAt,
+        registeredFacePhotoDataUrl: dataUrl,
+        faceConsentGiven: consentGiven,
+      },
+      { merge: true }
+    ).catch(() => {});
   } catch (error) {
     console.error(`Failed to save student photo in Firestore for student ${uid}:`, error);
     throw error;
@@ -173,7 +180,7 @@ export async function saveStudentPhoto(
 }
 
 /**
- * Reads the student photo from Firestore document studentPhotos/{uid}.
+ * Reads the student photo from Firestore document users/{uid} or students/{uid}.
  * Returns the dataUrl string or null if not found.
  */
 export async function getStudentPhoto(uid: string): Promise<string | null> {
@@ -190,29 +197,41 @@ export async function getStudentPhoto(uid: string): Promise<string | null> {
   }
 
   try {
-    const photoDocRef = doc(db, 'studentPhotos', uid);
-    const snap = await getDoc(photoDocRef);
-    if (snap.exists()) {
-      const data = snap.data();
-      const url = (data?.dataUrl as string) || null;
+    // 1. Check users/{uid}
+    const userSnap = await getDoc(doc(db, 'users', uid));
+    if (userSnap.exists()) {
+      const data = userSnap.data();
+      const url = data?.registeredFacePhotoDataUrl || data?.avatarUrl || null;
       if (url) {
         memoryPhotoCache.set(uid, {
           dataUrl: url,
-          updatedAt: data?.updatedAt || new Date().toISOString(),
-          consentGiven: Boolean(data?.consentGiven),
+          updatedAt: data?.registeredAt || new Date().toISOString(),
+          consentGiven: Boolean(data?.faceConsentGiven),
         });
+        return url;
       }
-      return url;
     }
+
+    // 2. Check students/{uid}
+    const studentSnap = await getDoc(doc(db, 'students', uid));
+    if (studentSnap.exists()) {
+      const data = studentSnap.data();
+      const url = data?.registeredFacePhotoDataUrl || null;
+      if (url) {
+        memoryPhotoCache.set(uid, {
+          dataUrl: url,
+          updatedAt: data?.registeredAt || new Date().toISOString(),
+          consentGiven: Boolean(data?.faceConsentGiven),
+        });
+        return url;
+      }
+    }
+
     return null;
   } catch (error: any) {
-    const msg = error?.message || String(error);
-    if (msg.includes('insufficient permissions') || msg.includes('permission-denied') || msg.includes('PERMISSION_DENIED')) {
-      console.warn(`[photoService] Notice: studentPhotos collection access restricted for ${uid}:`, msg);
-    } else {
-      console.warn(`[photoService] Notice: Could not fetch student photo for student ${uid}:`, error);
-    }
+    console.warn(`[photoService] Notice: Could not fetch student photo for student ${uid}:`, error);
     return null;
   }
 }
+
 

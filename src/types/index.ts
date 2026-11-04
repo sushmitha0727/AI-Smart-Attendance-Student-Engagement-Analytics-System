@@ -24,6 +24,11 @@ export interface User {
   faceConsentGiven?: boolean;
   hasRegisteredPhoto?: boolean;
   registeredAt?: string;
+  attendanceRefPath?: string;
+  attendanceRefURL?: string;
+  attendanceRefAt?: string;
+  attendanceRefLocked?: boolean;
+  attendanceRefConsent?: boolean;
 }
 
 export interface AcademicYear {

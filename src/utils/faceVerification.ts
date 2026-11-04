@@ -8,7 +8,7 @@ let modelsLoaded = false;
 let loadingPromise: Promise<void> | null = null;
 
 /**
- * Loads @vladmandic/face-api models from jsDelivr CDN
+ * Loads @vladmandic/face-api models from jsDelivr CDN (ssdMobilenetv1, tinyFaceDetector, faceLandmark68Net, faceRecognitionNet)
  */
 export async function loadFaceApiModels(): Promise<void> {
   if (modelsLoaded) return;
@@ -19,6 +19,7 @@ export async function loadFaceApiModels(): Promise<void> {
   loadingPromise = (async () => {
     try {
       await Promise.all([
+        faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
         faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
         faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
         faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
@@ -37,52 +38,62 @@ export async function loadFaceApiModels(): Promise<void> {
 }
 
 /**
- * Validates photo quality for registration: exactly one face, reasonably sized/centered, not too dark.
+ * Validates photo quality for registration: exactly one face, size, frontal, brightness.
+ * Instructions: plain, evenly lit, front-facing photo with full face visible, no sunglasses, mask, heavy filter or strong shadow.
  */
 export async function validateRegistrationPhoto(input: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement): Promise<{ valid: boolean; message?: string }> {
   await loadFaceApiModels();
 
-  const detections = await faceapi
-    .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+  const detection = await faceapi
+    .detectSingleFace(input, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
     .withFaceLandmarks();
 
-  if (!detections) {
-    return { valid: false, message: 'No face detected. Please ensure your face is clearly visible and well-lit.' };
+  if (!detection) {
+    return { valid: false, message: 'No face detected. Please ensure a plain, evenly lit, front-facing photo with your full face visible.' };
   }
 
-  const allDetections = await faceapi.detectAllFaces(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }));
-  if (allDetections.length === 0) {
-    return { valid: false, message: 'No face detected.' };
-  }
+  const allDetections = await faceapi.detectAllFaces(input, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }));
   if (allDetections.length > 1) {
-    return { valid: false, message: 'Multiple faces detected. Please ensure only your face is in the frame.' };
+    return { valid: false, message: 'More than one face detected. Please ensure only your face is in the frame.' };
   }
 
-  const box = detections.detection.box;
+  const box = detection.detection.box;
   const imageWidth = (input as any).width || (input as any).videoWidth || 640;
   const imageHeight = (input as any).height || (input as any).videoHeight || 480;
 
-  if (box.width < imageWidth * 0.15 || box.height < imageHeight * 0.15) {
+  if (box.width < 160 || box.width < imageWidth * 0.20) {
     return { valid: false, message: 'Face is too far away. Please move closer to the camera.' };
   }
 
-  const faceCenterX = box.x + box.width / 2;
-  const faceCenterY = box.y + box.height / 2;
-  if (
-    Math.abs(faceCenterX - imageWidth / 2) > imageWidth * 0.35 ||
-    Math.abs(faceCenterY - imageHeight / 2) > imageHeight * 0.35
-  ) {
-    return { valid: false, message: 'Face is not centered. Please center your face in the frame.' };
+  const landmarks = detection.landmarks;
+  const nose = landmarks.getNose();
+  const jaw = landmarks.getJawOutline();
+  const noseTip = nose[3];
+  const leftJaw = jaw[0];
+  const rightJaw = jaw[16];
+  const jawMidpointX = (leftJaw.x + rightJaw.x) / 2;
+  const jawWidth = Math.abs(rightJaw.x - leftJaw.x);
+  const noseOffset = Math.abs(noseTip.x - jawMidpointX);
+
+  if (jawWidth > 0 && (noseOffset / jawWidth) > 0.15) {
+    return { valid: false, message: 'Please face directly forward (frontal view required).' };
+  }
+
+  const leftEye = landmarks.getLeftEye();
+  const rightEye = landmarks.getRightEye();
+  const ear = (calculateEAR(leftEye) + calculateEAR(rightEye)) / 2;
+  if (ear < 0.20) {
+    return { valid: false, message: 'Eyes appear closed. Please keep your eyes open and look straight.' };
   }
 
   try {
     const canvas = document.createElement('canvas');
-    canvas.width = 100;
-    canvas.height = 100;
+    canvas.width = Math.min(200, imageWidth);
+    canvas.height = Math.min(200, imageHeight);
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.drawImage(input, 0, 0, 100, 100);
-      const imgData = ctx.getImageData(0, 0, 100, 100);
+      ctx.drawImage(input, 0, 0, canvas.width, canvas.height);
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       let totalBrightness = 0;
       for (let i = 0; i < imgData.data.length; i += 4) {
         const r = imgData.data[i];
@@ -90,9 +101,12 @@ export async function validateRegistrationPhoto(input: HTMLImageElement | HTMLVi
         const b = imgData.data[i + 2];
         totalBrightness += (r * 0.299 + g * 0.587 + b * 0.114);
       }
-      const avgBrightness = totalBrightness / (100 * 100);
-      if (avgBrightness < 40) {
-        return { valid: false, message: 'Image is too dark. Please ensure adequate lighting.' };
+      const avgBrightness = totalBrightness / (canvas.width * canvas.height);
+      if (avgBrightness < 70) {
+        return { valid: false, message: 'Too dark, face a light source.' };
+      }
+      if (avgBrightness > 200) {
+        return { valid: false, message: 'Too bright / overexposed. Adjust lighting.' };
       }
     }
   } catch (e) {
@@ -200,10 +214,17 @@ export async function validateRegistrationPhotoWithTimeout(
 /**
  * Computes 128-d face descriptor from image/video element
  */
-export async function computeFaceDescriptor(input: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement): Promise<Float32Array | null> {
+export async function computeFaceDescriptor(
+  input: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement,
+  useSsdMobileNet = true
+): Promise<Float32Array | null> {
   await loadFaceApiModels();
+  const options = useSsdMobileNet
+    ? new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })
+    : new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 });
+
   const detection = await faceapi
-    .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+    .detectSingleFace(input, options)
     .withFaceLandmarks()
     .withFaceDescriptor();
 

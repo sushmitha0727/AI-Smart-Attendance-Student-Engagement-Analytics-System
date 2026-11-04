@@ -134,6 +134,10 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    match /attendanceReference/{uid}/{file} {
+      allow read, write: if true;
+    }
+
     match /_connection_test_/{docId} {
       allow read, write: if true;
     }
