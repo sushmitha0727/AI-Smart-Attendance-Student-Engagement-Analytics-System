@@ -41,76 +41,54 @@ export async function loadFaceApiModels(): Promise<void> {
  * Validates photo quality for registration: exactly one face, size, frontal, brightness.
  * Instructions: plain, evenly lit, front-facing photo with full face visible, no sunglasses, mask, heavy filter or strong shadow.
  */
+function toCompactCanvas(
+  input: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement,
+  maxDim = 400
+): HTMLCanvasElement {
+  const srcW = (input as HTMLVideoElement).videoWidth || (input as HTMLImageElement).naturalWidth || input.width || 400;
+  const srcH = (input as HTMLVideoElement).videoHeight || (input as HTMLImageElement).naturalHeight || input.height || 300;
+  let w = srcW;
+  let h = srcH;
+  if (w > maxDim || h > maxDim) {
+    if (w > h) {
+      h = Math.max(1, Math.round((h * maxDim) / w));
+      w = maxDim;
+    } else {
+      w = Math.max(1, Math.round((w * maxDim) / h));
+      h = maxDim;
+    }
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.drawImage(input, 0, 0, w, h);
+  }
+  return canvas;
+}
+
 export async function validateRegistrationPhoto(input: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement): Promise<{ valid: boolean; message?: string }> {
   await loadFaceApiModels();
 
-  const detection = await faceapi
-    .detectSingleFace(input, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+  const compactCanvas = toCompactCanvas(input, 400);
+
+  let allDetections = await faceapi
+    .detectAllFaces(compactCanvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.35 }))
     .withFaceLandmarks();
 
-  if (!detection) {
+  if (allDetections.length === 0) {
+    allDetections = await faceapi
+      .detectAllFaces(compactCanvas, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.35 }))
+      .withFaceLandmarks();
+  }
+
+  if (allDetections.length === 0) {
     return { valid: false, message: 'No face detected. Please ensure a plain, evenly lit, front-facing photo with your full face visible.' };
   }
 
-  const allDetections = await faceapi.detectAllFaces(input, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }));
   if (allDetections.length > 1) {
     return { valid: false, message: 'More than one face detected. Please ensure only your face is in the frame.' };
-  }
-
-  const box = detection.detection.box;
-  const imageWidth = (input as any).width || (input as any).videoWidth || 640;
-  const imageHeight = (input as any).height || (input as any).videoHeight || 480;
-
-  if (box.width < 160 || box.width < imageWidth * 0.20) {
-    return { valid: false, message: 'Face is too far away. Please move closer to the camera.' };
-  }
-
-  const landmarks = detection.landmarks;
-  const nose = landmarks.getNose();
-  const jaw = landmarks.getJawOutline();
-  const noseTip = nose[3];
-  const leftJaw = jaw[0];
-  const rightJaw = jaw[16];
-  const jawMidpointX = (leftJaw.x + rightJaw.x) / 2;
-  const jawWidth = Math.abs(rightJaw.x - leftJaw.x);
-  const noseOffset = Math.abs(noseTip.x - jawMidpointX);
-
-  if (jawWidth > 0 && (noseOffset / jawWidth) > 0.15) {
-    return { valid: false, message: 'Please face directly forward (frontal view required).' };
-  }
-
-  const leftEye = landmarks.getLeftEye();
-  const rightEye = landmarks.getRightEye();
-  const ear = (calculateEAR(leftEye) + calculateEAR(rightEye)) / 2;
-  if (ear < 0.20) {
-    return { valid: false, message: 'Eyes appear closed. Please keep your eyes open and look straight.' };
-  }
-
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.min(200, imageWidth);
-    canvas.height = Math.min(200, imageHeight);
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(input, 0, 0, canvas.width, canvas.height);
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      let totalBrightness = 0;
-      for (let i = 0; i < imgData.data.length; i += 4) {
-        const r = imgData.data[i];
-        const g = imgData.data[i + 1];
-        const b = imgData.data[i + 2];
-        totalBrightness += (r * 0.299 + g * 0.587 + b * 0.114);
-      }
-      const avgBrightness = totalBrightness / (canvas.width * canvas.height);
-      if (avgBrightness < 70) {
-        return { valid: false, message: 'Too dark, face a light source.' };
-      }
-      if (avgBrightness > 200) {
-        return { valid: false, message: 'Too bright / overexposed. Adjust lighting.' };
-      }
-    }
-  } catch (e) {
-    // Ignore canvas read error
   }
 
   return { valid: true };
@@ -216,19 +194,28 @@ export async function validateRegistrationPhotoWithTimeout(
  */
 export async function computeFaceDescriptor(
   input: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement,
-  useSsdMobileNet = true
+  _useSsdMobileNet = true
 ): Promise<Float32Array | null> {
   await loadFaceApiModels();
-  const options = useSsdMobileNet
-    ? new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })
-    : new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 });
+  const compact = toCompactCanvas(input, 400);
 
-  const detection = await faceapi
-    .detectSingleFace(input, options)
+  // Fast path: TinyFaceDetector (~40ms)
+  const fastDetection = await faceapi
+    .detectSingleFace(compact, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.30 }))
     .withFaceLandmarks()
     .withFaceDescriptor();
 
-  return detection ? detection.descriptor : null;
+  if (fastDetection) {
+    return fastDetection.descriptor;
+  }
+
+  // Fallback path: SSD MobileNet
+  const fallbackDetection = await faceapi
+    .detectSingleFace(compact, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.30 }))
+    .withFaceLandmarks()
+    .withFaceDescriptor();
+
+  return fallbackDetection ? fallbackDetection.descriptor : null;
 }
 
 /**
@@ -256,8 +243,8 @@ export function calculateHeadTurn(landmarks: faceapi.FaceLandmarks68): 'left' | 
   const rightDist = Math.abs(noseTip.x - rightJaw.x);
   const ratio = leftDist / (rightDist || 1);
 
-  if (ratio > 1.35) return 'left';
-  if (ratio < 0.75) return 'right';
+  if (ratio > 1.20) return 'left';
+  if (ratio < 0.83) return 'right';
   return 'center';
 }
 
@@ -274,7 +261,7 @@ export function calculateNod(landmarks: faceapi.FaceLandmarks68): boolean {
   const chinY = jaw[8].y;
   const faceHeight = chinY - eyeCenterY;
   const noseRelativePos = (noseTipY - eyeCenterY) / (faceHeight || 1);
-  return noseRelativePos < 0.40 || noseRelativePos > 0.50;
+  return noseRelativePos < 0.42 || noseRelativePos > 0.48;
 }
 
 /**

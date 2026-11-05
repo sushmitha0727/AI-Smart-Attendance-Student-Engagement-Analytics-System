@@ -404,10 +404,10 @@ export const IdProvisioningManager: React.FC = () => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     return (
-      u.name.toLowerCase().includes(q) ||
-      u.email.toLowerCase().includes(q) ||
+      (u.name || '').toLowerCase().includes(q) ||
+      (u.email || '').toLowerCase().includes(q) ||
       (u.rollNumber && u.rollNumber.toLowerCase().includes(q)) ||
-      u.id.toLowerCase().includes(q)
+      (u.id || '').toLowerCase().includes(q)
     );
   });
 

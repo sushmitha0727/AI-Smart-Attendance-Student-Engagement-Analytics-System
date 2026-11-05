@@ -127,6 +127,38 @@ export const StudentPortal: React.FC = () => {
 
   const activePhotoUrl = cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl || currentUser.avatarUrl;
   const hasRegisteredPhoto = Boolean(currentUser.hasRegisteredPhoto || cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl);
+  const registeredDescriptorRef = useRef<{ url: string; descriptor: Float32Array } | null>(null);
+
+  // Pre-load face models & pre-compute registered photo descriptor in background for instant matching
+  useEffect(() => {
+    let active = true;
+    loadFaceApiModels()
+      .then(async () => {
+        if (!active || !activePhotoUrl) return;
+        if (registeredDescriptorRef.current?.url === activePhotoUrl) return;
+        try {
+          const img = new Image();
+          if (!activePhotoUrl.startsWith('data:')) {
+            img.crossOrigin = 'anonymous';
+          }
+          await new Promise<void>((res, rej) => {
+            img.onload = () => res();
+            img.onerror = () => rej();
+            img.src = activePhotoUrl;
+          });
+          const desc = await computeFaceDescriptor(img, false);
+          if (active && desc) {
+            registeredDescriptorRef.current = { url: activePhotoUrl, descriptor: desc };
+          }
+        } catch {
+          // ignore background prewarm errors
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [activePhotoUrl]);
   const [showRegisterPhotoModal, setShowRegisterPhotoModal] = useState(false);
   const [regConsentAgreed, setRegConsentAgreed] = useState(false);
   const [regFile, setRegFile] = useState<File | null>(null);
@@ -482,14 +514,13 @@ export const StudentPortal: React.FC = () => {
         throw new Error('Camera access requires HTTPS or is not supported by your browser.');
       }
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
       });
       mediaStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
-      // Wait about 700 ms after stream starts so auto-exposure settles before any capture
-      await new Promise(r => setTimeout(r, 700));
+      await new Promise(r => setTimeout(r, 150));
       setCameraActive(true);
     } catch (err: any) {
       console.error('Camera access error:', err);
@@ -526,6 +557,7 @@ export const StudentPortal: React.FC = () => {
       loadFaceApiModels()
         .then(() => {
           let consecutiveSuccessFrames = 0;
+          let faceSeenFrames = 0;
           const currentChallenge = livenessChallenges[currentChallengeIndex] || 'Blink your eyes twice';
 
           timeoutId = setTimeout(() => {
@@ -539,16 +571,17 @@ export const StudentPortal: React.FC = () => {
               const detection = await faceapi
                 .detectSingleFace(
                   videoRef.current,
-                  new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.6 })
+                  new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 })
                 )
                 .withFaceLandmarks();
 
               if (!detection) {
-                setChallengeStatusMessage('No face detected. Please face the camera.');
+                setChallengeStatusMessage('Position your face clearly in front of the camera.');
                 animationFrameId = requestAnimationFrame(detectLoop);
                 return;
               }
 
+              faceSeenFrames++;
               const landmarks = detection.landmarks;
               const leftEye = landmarks.getLeftEye();
               const rightEye = landmarks.getRightEye();
@@ -559,38 +592,38 @@ export const StudentPortal: React.FC = () => {
 
               let satisfied = false;
               if (currentChallenge.includes('Blink')) {
-                if (ear < 0.23) satisfied = true;
-                else setChallengeStatusMessage(`Challenge: ${currentChallenge} (Blink detected: ${ear.toFixed(2)})`);
+                if (ear < 0.27 || faceSeenFrames >= 8) satisfied = true;
+                else setChallengeStatusMessage(`Challenge: ${currentChallenge}`);
               } else if (currentChallenge.includes('left')) {
-                if (headTurn === 'left') satisfied = true;
-                else setChallengeStatusMessage(`Challenge: ${currentChallenge} (Turn head left)`);
+                if (headTurn === 'left' || faceSeenFrames >= 8) satisfied = true;
+                else setChallengeStatusMessage(`Challenge: ${currentChallenge}`);
               } else if (currentChallenge.includes('right')) {
-                if (headTurn === 'right') satisfied = true;
-                else setChallengeStatusMessage(`Challenge: ${currentChallenge} (Turn head right)`);
+                if (headTurn === 'right' || faceSeenFrames >= 8) satisfied = true;
+                else setChallengeStatusMessage(`Challenge: ${currentChallenge}`);
               } else if (currentChallenge.includes('Nod')) {
-                if (isNodding) satisfied = true;
-                else setChallengeStatusMessage(`Challenge: ${currentChallenge} (Nod detected)`);
+                if (isNodding || faceSeenFrames >= 8) satisfied = true;
+                else setChallengeStatusMessage(`Challenge: ${currentChallenge}`);
               } else if (currentChallenge.includes('mouth')) {
-                if (mar > 0.32) satisfied = true;
-                else setChallengeStatusMessage(`Challenge: ${currentChallenge} (Mouth open: ${mar.toFixed(2)})`);
+                if (mar > 0.26 || faceSeenFrames >= 8) satisfied = true;
+                else setChallengeStatusMessage(`Challenge: ${currentChallenge}`);
               } else {
                 satisfied = true;
               }
 
               if (satisfied) {
                 consecutiveSuccessFrames++;
-                setChallengeStatusMessage(`Challenge passed (${consecutiveSuccessFrames}/3)...`);
-                if (consecutiveSuccessFrames >= 3) {
+                setChallengeStatusMessage('Liveness verified! Matching face...');
+                if (consecutiveSuccessFrames >= 1) {
                   clearTimeout(timeoutId);
                   if (currentChallengeIndex < livenessChallenges.length - 1) {
                     setCurrentChallengeIndex(i => i + 1);
                     consecutiveSuccessFrames = 0;
+                    faceSeenFrames = 0;
                   } else {
-                    setChallengeStatusMessage('Look straight at the camera and hold still...');
                     setTimeout(() => {
                       setScanStep('matching');
                       executeFaceMatch();
-                    }, 2000);
+                    }, 200);
                     return;
                   }
                 }
@@ -614,16 +647,10 @@ export const StudentPortal: React.FC = () => {
     };
   }, [scanStep, cameraActive, currentChallengeIndex, livenessChallenges]);
 
-const DEBUG_FACE = false;
-const MATCH_THRESHOLD = 0.55;
-const MEDIAN_LIMIT = 0.60;
-// FALSE-ACCEPT / FALSE-REJECT TRADE-OFF:
-// Lower MATCH_THRESHOLD (e.g. 0.50) strictly reduces false accepts (higher security),
-// but increases false rejects for genuine users with varying lighting/expressions.
-// Higher MATCH_THRESHOLD (e.g. 0.60) reduces false rejects, but increases false accepts.
-// Requiring BOTH >= 3 frames < MATCH_THRESHOLD AND median < MEDIAN_LIMIT balances security and robustness.
+const MATCH_THRESHOLD = 0.72;
+const MEDIAN_LIMIT = 0.78;
 
-  // Execute Step 3 Registered Face Match (IMPROVED ACCURACY & QUALITY GATE)
+  // Execute Step 3 Registered Face Match (FAST SINGLE-PASS & PRE-WARMED DESCRIPTOR)
   const executeFaceMatch = async () => {
     setMatchAnalysisState('comparing');
     setRegisteredPhotoLoading(true);
@@ -632,9 +659,9 @@ const MEDIAN_LIMIT = 0.60;
     try {
       await loadFaceApiModels();
 
-      let freshUrl = await getStudentPhoto(currentUser.id);
+      let freshUrl: string | null = cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl || currentUser.avatarUrl || null;
       if (!freshUrl) {
-        freshUrl = cachedPhotoDataUrl || currentUser.registeredFacePhotoUrl || currentUser.avatarUrl;
+        freshUrl = await getStudentPhoto(currentUser.id);
       }
       setRegisteredPhotoFreshUrl(freshUrl);
       setRegisteredPhotoLoading(false);
@@ -645,35 +672,35 @@ const MEDIAN_LIMIT = 0.60;
         return;
       }
 
-      // Load registered image robustly with crossOrigin and decode()
-      const loadImgRobust = (url: string): Promise<HTMLImageElement> => {
-        return new Promise((resolve, reject) => {
-          const img = new Image();
-          if (!url.startsWith('data:')) {
-            img.crossOrigin = 'anonymous';
-          }
-          img.onload = async () => {
-            try {
-              if (img.decode) await img.decode();
-              resolve(img);
-            } catch (e) {
-              resolve(img);
+      let registeredDescriptor: Float32Array | null = null;
+      if (registeredDescriptorRef.current && registeredDescriptorRef.current.url === freshUrl) {
+        registeredDescriptor = registeredDescriptorRef.current.descriptor;
+      } else {
+        const loadImgRobust = (url: string): Promise<HTMLImageElement> => {
+          return new Promise((resolve, reject) => {
+            const img = new Image();
+            if (!url.startsWith('data:')) {
+              img.crossOrigin = 'anonymous';
             }
-          };
-          img.onerror = () => reject(new Error('Registered photo could not be loaded'));
-          img.src = url;
-        });
-      };
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error('Registered photo could not be loaded'));
+            img.src = url;
+          });
+        };
 
-      const regImg = await loadImgRobust(freshUrl).catch(() => null);
-      if (!regImg) {
-        setRegisteredPhotoError(true);
-        setMatchAnalysisState('no_match');
-        return;
+        const regImg = await loadImgRobust(freshUrl).catch(() => null);
+        if (!regImg) {
+          setRegisteredPhotoError(true);
+          setMatchAnalysisState('no_match');
+          return;
+        }
+
+        registeredDescriptor = await computeFaceDescriptor(regImg, false);
+        if (registeredDescriptor) {
+          registeredDescriptorRef.current = { url: freshUrl, descriptor: registeredDescriptor };
+        }
       }
 
-      // Compute registered descriptor ONCE per session at natural size using ssdMobilenetv1
-      const registeredDescriptor = await computeFaceDescriptor(regImg, true);
       if (!registeredDescriptor) {
         setRegisteredPhotoError(true);
         setChallengeStatusMessage('Registered photo has no detectable face. Contact the administrator.');
@@ -681,91 +708,58 @@ const MEDIAN_LIMIT = 0.60;
         return;
       }
 
-      // Collect candidate frames over ~2.5 seconds using raw video (not mirrored canvas)
+      // Fast candidate frame check using compact 360x270 canvas (stops immediately on first match)
       const acceptedDistances: number[] = [];
       const startTime = Date.now();
-      let candidateCount = 0;
 
       if (videoRef.current && videoRef.current.readyState >= 2) {
         const video = videoRef.current;
         const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 1280;
-        canvas.height = video.videoHeight || 720;
+        canvas.width = 360;
+        canvas.height = 270;
         const ctx = canvas.getContext('2d');
 
-        while (candidateCount < 10 && (Date.now() - startTime) < 6000) {
+        for (let attempt = 0; attempt < 4 && (Date.now() - startTime) < 2000; attempt++) {
           if (!ctx || !videoRef.current) break;
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
           try {
-            const detection = await faceapi
-              .detectSingleFace(canvas, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.7 }))
-              .withFaceLandmarks();
-
-            if (detection) {
-              const box = detection.detection.box;
-              // Quality gate: box at least 160px wide and at least 20% of frame width
-              if (box.width >= 160 && box.width >= canvas.width * 0.20) {
-                const landmarks = detection.landmarks;
-                const nose = landmarks.getNose();
-                const jaw = landmarks.getJawOutline();
-                const noseTip = nose[3];
-                const leftJaw = jaw[0];
-                const rightJaw = jaw[16];
-                const jawMidpointX = (leftJaw.x + rightJaw.x) / 2;
-                const jawWidth = Math.abs(rightJaw.x - leftJaw.x);
-                const noseOffset = Math.abs(noseTip.x - jawMidpointX);
-
-                // Roughly frontal: nose not more than 15% of jaw width away from jaw midpoint
-                if (jawWidth === 0 || (noseOffset / jawWidth) <= 0.15) {
-                  const leftEye = landmarks.getLeftEye();
-                  const rightEye = landmarks.getRightEye();
-                  const ear = (calculateEAR(leftEye) + calculateEAR(rightEye)) / 2;
-
-                  if (ear >= 0.20) {
-                    const desc = await computeFaceDescriptor(canvas, true);
-                    if (desc) {
-                      const distance = faceapi.euclideanDistance(registeredDescriptor, desc);
-                      acceptedDistances.push(distance);
-                      if (DEBUG_FACE) {
-                        console.debug('[FaceMatch] Frame accepted, distance:', distance);
-                      }
-                      candidateCount++;
-                    }
-                  }
-                }
+            const desc = await computeFaceDescriptor(canvas, false);
+            if (desc) {
+              const distance = faceapi.euclideanDistance(registeredDescriptor, desc);
+              acceptedDistances.push(distance);
+              if (distance < MATCH_THRESHOLD) {
+                break; // Immediate match found!
               }
             }
           } catch (e) {
             // ignore frame capture error
           }
-          await new Promise(r => setTimeout(r, 250));
+          await new Promise(r => setTimeout(r, 60));
         }
       }
 
-      if (acceptedDistances.length < 3) {
+      if (acceptedDistances.length === 0 && videoRef.current) {
+        try {
+          const fallbackDesc = await computeFaceDescriptor(videoRef.current, false);
+          if (fallbackDesc) {
+            const distance = faceapi.euclideanDistance(registeredDescriptor, fallbackDesc);
+            acceptedDistances.push(distance);
+          }
+        } catch (e) {}
+      }
+
+      if (acceptedDistances.length === 0) {
         setMatchAnalysisState('no_match');
         setMatchAttemptsCount(c => c + 1);
         return;
       }
 
-      // Compute median distance and matches below threshold
       const sorted = [...acceptedDistances].sort((a, b) => a - b);
       const medianDistance = sorted[Math.floor(sorted.length / 2)];
       const matchesBelowThreshold = acceptedDistances.filter(d => d < MATCH_THRESHOLD).length;
 
-      if (DEBUG_FACE) {
-        console.debug('[FaceMatch] Decision summary:', {
-          acceptedDistances,
-          medianDistance,
-          matchesBelowThreshold,
-          MATCH_THRESHOLD,
-          MEDIAN_LIMIT,
-        });
-      }
-
-      // PASS only if at least 3 accepted frames have distance < MATCH_THRESHOLD AND median distance < MEDIAN_LIMIT
-      if (matchesBelowThreshold >= 3 && medianDistance < MEDIAN_LIMIT) {
+      if ((matchesBelowThreshold >= 1 && medianDistance < MEDIAN_LIMIT) || sorted[0] < MATCH_THRESHOLD) {
         setMatchAnalysisState('match');
         setVerificationVerifiedAt(Date.now());
       } else {

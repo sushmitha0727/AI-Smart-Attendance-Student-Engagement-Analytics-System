@@ -69,7 +69,7 @@ export const AdminDataManagement: React.FC = () => {
   }, [users]);
 
   const existingEmails = useMemo(() => {
-    return new Set(users.map(u => u.email.toLowerCase().trim()));
+    return new Set(users.map(u => (u.email || '').toLowerCase().trim()));
   }, [users]);
 
   const knownFacultyIds = useMemo(() => {
