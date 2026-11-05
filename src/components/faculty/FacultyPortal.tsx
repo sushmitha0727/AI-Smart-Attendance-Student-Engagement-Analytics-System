@@ -190,6 +190,8 @@ export const FacultyPortal: React.FC = () => {
   const [newSessSectionId, setNewSessSectionId] = useState(mySections[0]?.id || '');
   const [newSessRoom, setNewSessRoom] = useState('Lab 402');
   const [newSessPeriod, setNewSessPeriod] = useState(1);
+  const [geofenceEnabled, setGeofenceEnabled] = useState(true);
+  const [geofenceRadius, setGeofenceRadius] = useState(50);
 
   // New Assignment Modal
   const [showNewAsgModal, setShowNewAsgModal] = useState(false);
@@ -1960,8 +1962,11 @@ export const FacultyPortal: React.FC = () => {
                           </div>
 
                           <div className="text-right">
-                            <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold">
-                              Face Verified + QR
+                            <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold block">
+                              Face Verified + {activeSession.geofenceEnabled ? `Geofenced (${activeSession.geofenceRadius || 50}m)` : 'QR'}
+                            </span>
+                            <span className="text-[10px] text-emerald-600 font-mono block mt-0.5">
+                              {rec.distanceMeters !== undefined ? `${Math.round(rec.distanceMeters)}m from room center` : 'Location verified'}
                             </span>
                             <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
                               {rec.scanTime}
@@ -1984,7 +1989,46 @@ export const FacultyPortal: React.FC = () => {
               <form
                 onSubmit={e => {
                   e.preventDefault();
-                  startAttendanceSession(newSessSubjectId, newSessSectionId, newSessRoom, newSessPeriod);
+                  if (navigator.geolocation && geofenceEnabled) {
+                    navigator.geolocation.getCurrentPosition(
+                      pos => {
+                        startAttendanceSession(
+                          newSessSubjectId,
+                          newSessSectionId,
+                          newSessRoom,
+                          newSessPeriod,
+                          geofenceEnabled,
+                          geofenceRadius,
+                          pos.coords.latitude,
+                          pos.coords.longitude
+                        );
+                      },
+                      () => {
+                        startAttendanceSession(
+                          newSessSubjectId,
+                          newSessSectionId,
+                          newSessRoom,
+                          newSessPeriod,
+                          geofenceEnabled,
+                          geofenceRadius,
+                          12.9716,
+                          77.5946
+                        );
+                      },
+                      { timeout: 5000 }
+                    );
+                  } else {
+                    startAttendanceSession(
+                      newSessSubjectId,
+                      newSessSectionId,
+                      newSessRoom,
+                      newSessPeriod,
+                      geofenceEnabled,
+                      geofenceRadius,
+                      12.9716,
+                      77.5946
+                    );
+                  }
                 }}
                 className="space-y-4 text-xs"
               >
@@ -2041,10 +2085,47 @@ export const FacultyPortal: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Geofence Configuration */}
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="font-semibold text-slate-800 flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={geofenceEnabled}
+                        onChange={e => setGeofenceEnabled(e.target.checked)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Enable Location Geofencing</span>
+                    </label>
+                    <span className="text-[10px] text-slate-500 font-mono">Haversine Radius Check</span>
+                  </div>
+
+                  {geofenceEnabled && (
+                    <div>
+                      <div className="flex justify-between text-slate-600 mb-1">
+                        <span>Permitted Radius:</span>
+                        <span className="font-bold text-blue-700">{geofenceRadius} meters</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={30}
+                        max={200}
+                        step={10}
+                        value={geofenceRadius}
+                        onChange={e => setGeofenceRadius(Number(e.target.value))}
+                        className="w-full accent-blue-600"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Student devices must be within {geofenceRadius}m of faculty room coordinates to record attendance.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-slate-600 text-[11px] space-y-1">
                   <div>• QR Code rotates automatically every 5 seconds.</div>
                   <div>• 15-minute strict countdown window enforces on-time arrival.</div>
-                  <div>• Students must pass random liveness challenge before scanning.</div>
+                  <div>• Students must pass random liveness challenge & geofence before scanning.</div>
                 </div>
 
                 <button

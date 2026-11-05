@@ -53,6 +53,7 @@ export const SEED_SECTIONS: Section[] = [
   { id: 'sec-7-aiml-c', name: 'VII BTech 2023 CSE AIML - C', academicYearId: 'ay-2025-26', programId: 'prog-cse', semesterId: 'sem-5', studentCount: 50 },
   { id: 'sec-7-btech-aiml', name: 'VII BTech 2023 BTECH - AIML', academicYearId: 'ay-2025-26', programId: 'prog-cse', semesterId: 'sem-5', studentCount: 47 },
   { id: 'sec-7-aiml-a', name: 'VII BTech 2023 CSE AIML - A', academicYearId: 'ay-2025-26', programId: 'prog-cse', semesterId: 'sem-5', studentCount: 51 },
+  { id: 'sec-v-btech-arvr', name: 'V Btech 2024_ASAC_IT_ARVR', academicYearId: 'ay-2025-26', programId: 'prog-cse', semesterId: 'sem-5', studentCount: 50 },
 ];
 
 export const SEED_SUBJECTS: Subject[] = [
@@ -68,6 +69,7 @@ export const SEED_SUBJECTS: Subject[] = [
   { id: 'sub-soft-skills', code: 'HU101', name: 'Soft Skills', programId: 'prog-cse', semesterId: 'sem-1', credits: 2, type: 'Skill Development', hasCodingComponent: false, hasLiveQuiz: false },
   { id: 'sub-leadership', code: 'HU102', name: 'Leadership and Management Skills', programId: 'prog-cse', semesterId: 'sem-1', credits: 2, type: 'Theory', hasCodingComponent: false, hasLiveQuiz: false },
   { id: 'sub-design-proj', code: 'PR201', name: 'Design Project-I', programId: 'prog-cse', semesterId: 'sem-3', credits: 3, type: 'Practical/Lab', hasCodingComponent: false, hasLiveQuiz: false },
+  { id: 'sub-design-proj-arvr', code: 'E1ITA 306', name: 'Design Project-I ( E1ITA 306)', programId: 'prog-cse', semesterId: 'sem-5', credits: 3, type: 'Practical/Lab', hasCodingComponent: true, hasLiveQuiz: false },
 ];
 
 export const SEED_USERS: User[] = [
@@ -105,6 +107,16 @@ export const SEED_USERS: User[] = [
     role: 'faculty',
     avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&q=80',
     department: 'Humanities & Management',
+    designation: 'Professor',
+  },
+  {
+    id: 'fac-subrata',
+    name: 'Dr. Subrata Pain',
+    email: 'subratapain@alliance.edu.in',
+    password: 'password123',
+    role: 'faculty',
+    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
+    department: 'Computer Science & Engineering',
     designation: 'Professor',
   },
   {
@@ -415,6 +427,11 @@ export const SEED_FACULTY_ASSIGNMENTS: FacultyAssignment[] = [
   { id: 'fa-5', facultyId: 'fac-vikram', subjectId: 'sub-leadership', sectionId: 'sec-1a', academicYearId: 'ay-2025-26' },
   { id: 'fa-6', facultyId: 'fac-vikram', subjectId: 'sub-soft-skills', sectionId: 'sec-1a', academicYearId: 'ay-2025-26' },
   { id: 'fa-7', facultyId: 'fac-vikram', subjectId: 'sub-leadership', sectionId: 'sec-1b', academicYearId: 'ay-2025-26' },
+  { id: 'fa-arvr', facultyId: 'fac-ramesh', subjectId: 'sub-design-proj-arvr', sectionId: 'sec-v-btech-arvr', academicYearId: 'ay-2025-26' },
+  { id: 'fa-subrata-1', facultyId: 'fac-subrata', subjectId: 'sub-java', sectionId: 'sec-2b', academicYearId: 'ay-2025-26' },
+  { id: 'fa-subrata-2', facultyId: 'fac-subrata', subjectId: 'sub-data-mining', sectionId: 'sec-2b', academicYearId: 'ay-2025-26' },
+  { id: 'fa-subrata-3', facultyId: 'fac-subrata', subjectId: 'sub-automl-7cs1281', sectionId: 'sec-7-aiml-c', academicYearId: 'ay-2025-26' },
+  { id: 'fa-subrata-4', facultyId: 'fac-subrata', subjectId: 'sub-design-proj-arvr', sectionId: 'sec-v-btech-arvr', academicYearId: 'ay-2025-26' },
 ];
 
 export const SEED_TIMETABLE: TimetableSlot[] = [
@@ -427,6 +444,12 @@ export const SEED_TIMETABLE: TimetableSlot[] = [
   { id: 'tt-4', subjectId: 'sub-java', sectionId: 'sec-2a', facultyId: 'fac-ramesh', dayOfWeek: 'Friday', startTime: '09:00', endTime: '11:00', room: 'Lab 402', periodNumber: 1 },
   { id: 'tt-5', subjectId: 'sub-crypto', sectionId: 'sec-2a', facultyId: 'fac-anita', dayOfWeek: 'Thursday', startTime: '14:00', endTime: '15:00', room: 'Hall 201', periodNumber: 5 },
   { id: 'tt-6', subjectId: 'sub-leadership', sectionId: 'sec-1a', facultyId: 'fac-vikram', dayOfWeek: 'Friday', startTime: '10:00', endTime: '11:00', room: 'Seminar Hall B', periodNumber: 2 },
+  { id: 'tt-arvr-2', subjectId: 'sub-design-proj-arvr', sectionId: 'sec-v-btech-arvr', facultyId: 'fac-ramesh', dayOfWeek: 'Monday', startTime: '09:00', endTime: '09:55', room: 'LT 517', periodNumber: 2 },
+  { id: 'tt-arvr-wed', subjectId: 'sub-design-proj-arvr', sectionId: 'sec-v-btech-arvr', facultyId: 'fac-ramesh', dayOfWeek: 'Wednesday', startTime: '09:00', endTime: '09:55', room: 'LT 517', periodNumber: 2 },
+  { id: 'tt-subrata-1', subjectId: 'sub-java', sectionId: 'sec-2b', facultyId: 'fac-subrata', dayOfWeek: 'Monday', startTime: '11:15', endTime: '12:15', room: 'Hall 201', periodNumber: 3 },
+  { id: 'tt-subrata-2', subjectId: 'sub-data-mining', sectionId: 'sec-2b', facultyId: 'fac-subrata', dayOfWeek: 'Wednesday', startTime: '09:00', endTime: '10:00', room: 'Lab 402', periodNumber: 1 },
+  { id: 'tt-subrata-3', subjectId: 'sub-design-proj-arvr', sectionId: 'sec-v-btech-arvr', facultyId: 'fac-subrata', dayOfWeek: 'Tuesday', startTime: '09:00', endTime: '09:55', room: 'LT 517', periodNumber: 2 },
+  { id: 'tt-subrata-4', subjectId: 'sub-automl-7cs1281', sectionId: 'sec-7-aiml-c', facultyId: 'fac-subrata', dayOfWeek: 'Thursday', startTime: '14:00', endTime: '15:00', room: 'Lab 502', periodNumber: 5 },
 ];
 
 export const SEED_ATTENDANCE_SESSIONS: AttendanceSession[] = [

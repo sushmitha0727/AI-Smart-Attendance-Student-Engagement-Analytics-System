@@ -112,6 +112,10 @@ export interface AttendanceSession {
   closedAt?: number;
   currentQrToken: string;
   qrGeneratedAt: number;
+  geofenceEnabled?: boolean;
+  geofenceRadius?: number; // meters
+  facultyLatitude?: number;
+  facultyLongitude?: number;
 }
 
 export type AttendanceStatus = 'Present' | 'Absent' | 'Late' | 'Excused';
@@ -128,6 +132,8 @@ export interface AttendanceRecord {
   scanTime?: string;
   suspiciousAttempt?: boolean;
   rejectionReason?: string;
+  distanceMeters?: number;
+  locationVerified?: boolean;
 }
 
 export interface AttendanceCorrectionLog {

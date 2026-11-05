@@ -133,12 +133,23 @@ interface AppContextType {
   updateGroupProject: (id: string, updates: Partial<GroupProject>) => void;
 
   // Actions
-  startAttendanceSession: (subjectId: string, sectionId: string, room: string, period: number) => AttendanceSession;
+  startAttendanceSession: (
+    subjectId: string,
+    sectionId: string,
+    room: string,
+    period: number,
+    geofenceEnabled?: boolean,
+    geofenceRadius?: number,
+    facultyLatitude?: number,
+    facultyLongitude?: number
+  ) => AttendanceSession;
   closeAttendanceSession: (sessionId: string) => void;
   processStudentScan: (params: {
     sessionId: string;
     student: User;
     scannedToken: string;
+    studentLatitude?: number;
+    studentLongitude?: number;
   }) => { success: boolean; message: string; record?: AttendanceRecord };
   correctAttendance: (params: {
     recordId: string;
@@ -447,7 +458,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => clearInterval(timer);
   }, []);
 
-  const startAttendanceSession = (subjectId: string, sectionId: string, room: string, period: number): AttendanceSession => {
+  const startAttendanceSession = (
+    subjectId: string,
+    sectionId: string,
+    room: string,
+    period: number,
+    geofenceEnabled: boolean = true,
+    geofenceRadius: number = 50,
+    facultyLatitude?: number,
+    facultyLongitude?: number
+  ): AttendanceSession => {
     const now = Date.now();
     const id = `sess-${Date.now().toString(36)}`;
     const { token } = generateDynamicQrToken(id, now);
@@ -465,6 +485,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       active: true,
       currentQrToken: token,
       qrGeneratedAt: now,
+      geofenceEnabled,
+      geofenceRadius,
+      facultyLatitude: facultyLatitude ?? 12.9716,
+      facultyLongitude: facultyLongitude ?? 77.5946,
     };
 
     setAttendanceSessions(prev => [newSession, ...prev]);
@@ -481,8 +505,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     sessionId: string;
     student: User;
     scannedToken: string;
+    studentLatitude?: number;
+    studentLongitude?: number;
   }) => {
-    const { sessionId, student, scannedToken } = params;
+    const { sessionId, student, scannedToken, studentLatitude, studentLongitude } = params;
     const session = attendanceSessions.find(s => s.id === sessionId);
 
     if (!session) {
@@ -495,11 +521,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       scannedToken,
       existingRecords: attendanceRecords,
       currentTimeMs: Date.now(),
+      studentLatitude,
+      studentLongitude,
     });
 
     if (!validation.isValid) {
-      // Record suspicious attempt
-      if (validation.status === 'SUSPICIOUS') {
+      if (validation.status === 'SUSPICIOUS' || validation.status === 'REJECTED') {
         const suspiciousRecord: AttendanceRecord = {
           id: `rec-susp-${Date.now().toString(36)}`,
           sessionId: session.id,
@@ -512,6 +539,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           scanTime: new Date().toLocaleTimeString(),
           suspiciousAttempt: true,
           rejectionReason: validation.reason,
+          distanceMeters: validation.distanceMeters,
         };
         setAttendanceRecords(prev => [suspiciousRecord, ...prev]);
       }
@@ -530,11 +558,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       verificationType: 'Face+QR',
       scanTime: new Date().toLocaleTimeString(),
       suspiciousAttempt: false,
+      distanceMeters: validation.distanceMeters,
+      locationVerified: true,
     };
 
     setAttendanceRecords(prev => [newRecord, ...prev]);
     saveAttendanceRecordToFirestore(newRecord).catch(e => console.warn('Firestore attendance save notice:', e?.message));
-    return { success: true, message: 'Attendance recorded successfully via Face Match + Rotating QR!', record: newRecord };
+    return { success: true, message: `Attendance recorded successfully! Distance from class: ${validation.distanceMeters !== undefined ? Math.round(validation.distanceMeters) + 'm' : 'Verified'}.`, record: newRecord };
   };
 
   const correctAttendance = (params: {
@@ -1019,7 +1049,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     avatarUrl?: string;
   }): User => {
     const empId = (data.employeeId?.trim() || `FAC-${Math.floor(1000 + Math.random() * 9000)}`).toUpperCase();
-    const existing = users.find(u => u.id.toLowerCase() === empId.toLowerCase() || u.email.toLowerCase() === data.email.trim().toLowerCase());
+    const existing = users.find(u => (u.id?.toLowerCase() === empId.toLowerCase()) || (u.email?.toLowerCase() === data.email?.trim().toLowerCase()));
     if (existing) {
       throw new Error(`Faculty with ID "${empId}" or Email "${data.email}" already exists.`);
     }
@@ -1227,8 +1257,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const matchedUser = users.find(u => {
-      const idMatch = u.id.toLowerCase() === cleanId;
-      const emailMatch = u.email.toLowerCase() === cleanId;
+      const idMatch = u.id && u.id.toLowerCase() === cleanId;
+      const emailMatch = u.email && u.email.toLowerCase() === cleanId;
       const rollMatch = u.rollNumber && u.rollNumber.toLowerCase() === cleanId;
       const aliasAdmin = (cleanId === 'admin' || cleanId === 'dean') && u.role === 'admin';
       const aliasFaculty = (cleanId === 'faculty' || cleanId === 'teacher' || cleanId === 'ramesh') && u.id === 'fac-ramesh';

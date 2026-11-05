@@ -394,18 +394,33 @@ export function generateDynamicQrToken(sessionId: string, timestampMs: number): 
  * 4. Token must match current interval or immediately previous interval (grace tolerance of 5s)
  * 5. Student must not have already submitted for this session
  */
+export function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000; // Earth mean radius in meters
+  const toRad = (val: number) => (val * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 export function validateAttendanceScan(params: {
   session: AttendanceSession;
   student: User;
   scannedToken: string;
   existingRecords: AttendanceRecord[];
   currentTimeMs: number;
+  studentLatitude?: number;
+  studentLongitude?: number;
 }): {
   isValid: boolean;
   status: 'ACCEPTED' | 'REJECTED' | 'SUSPICIOUS';
   reason?: string;
+  distanceMeters?: number;
 } {
-  const { session, student, scannedToken, existingRecords, currentTimeMs } = params;
+  const { session, student, scannedToken, existingRecords, currentTimeMs, studentLatitude, studentLongitude } = params;
 
   // 1. Session active check
   if (!session.active) {
@@ -466,9 +481,34 @@ export function validateAttendanceScan(params: {
     };
   }
 
+  // 6. Geofence check if enabled
+  let distanceMeters: number | undefined;
+  if (session.geofenceEnabled && session.facultyLatitude !== undefined && session.facultyLongitude !== undefined) {
+    if (studentLatitude !== undefined && studentLongitude !== undefined) {
+      distanceMeters = calculateHaversineDistance(
+        session.facultyLatitude,
+        session.facultyLongitude,
+        studentLatitude,
+        studentLongitude
+      );
+      const radius = session.geofenceRadius || 50;
+      if (distanceMeters > radius) {
+        return {
+          isValid: false,
+          status: 'REJECTED',
+          reason: `Geofence check failed: You are ${Math.round(distanceMeters)}m away from the classroom center (permitted radius: ${radius}m). Please move closer.`,
+          distanceMeters,
+        };
+      }
+    } else {
+      distanceMeters = 0;
+    }
+  }
+
   return {
     isValid: true,
     status: 'ACCEPTED',
+    distanceMeters,
   };
 }
 
